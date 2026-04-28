@@ -1547,3 +1547,973 @@ A couple of things to watch:
 - The "5' partner first" rule comes from line order in the guides file — if your guides file lists the 3' partner first for a given group, the FASTA will come out reversed. Easy to flip with row order; let me know if you'd rather drive it from a column instead.
 - Match-by-position-within-range relies on the breakpoint file's range actually bracketing the guide pos. If your guide positions sit outside the listed `chr:start:end`, the script falls back to the first region on that chromosome and warns — worth eyeballing the warnings on the first run.
 - Reverse complement is plain base-flip + reverse on `ACGTN`; any other characters (shouldn't happen from mpileup output) pass through unchanged.
+
+---
+
+_**User (2026-04-28 08:01:48Z)**_
+
+Don't we already know the strand from the alignment information
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 08:02:45Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:02:54Z)**_
+
+You're right — for each read in the BAM, FLAG bit 0x10 already tells us whether it aligned reverse-complemented to the reference, so the per-side strand falls out of the alignments themselves. The reason I reached for a guides file is that one FLAG only tells us the orientation of a read, not the gene's transcribed strand — but in this pipeline (stranded long-read cDNA/RNA, supporting reads selected by `filterEnds.pl`) the two coincide closely enough that a majority vote across the supporting reads on each side gives you the gene strand for free.
+
+Concretely, I'd replace `--guideFile` with this:
+
+- For each breakpoint line `regionA;regionB` (the line itself groups the two halves; line order in the file = 5'→3' order, same convention `findBreakPoints` already uses).
+- Pull the supporting reads in that region from the BAM, count FLAG&16 vs not. If reverse-strand reads are the majority, reverse-complement that side's consensus.
+- Concatenate side A + side B → one FASTA record per breakpoint line.
+
+The one tradeoff: at a region where coverage is split ~50/50 (rare for stranded libraries, but possible with a noisy guide or off-target reads) the call is fragile. I'd warn when the majority is below something like 70% rather than silently picking.
+
+Want me to swap the `--guideFile` path out for this BAM-driven version (keeping `--guideFile` only as an override for the ambiguous cases)?
+
+---
+
+_**User (2026-04-28 08:03:35Z)**_
+
+yes - that should be the default
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 08:04:24Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:04:25Z)**_
+
+I'll make the BAM-derived strand the default and keep `--guideFile` as a complete override.
+
+_**Agent (claude-opus-4-7 2026-04-28 08:04:26Z)**_
+
+<tool-use data-tool-type="read" data-tool-name="Read"><details>
+<summary>Tool use: **Read**</summary>
+ `./bin/breakpointPileup.pl`
+
+```text
+1	#!/usr/bin/perl
+2	
+3	# breakpointPileup.pl
+4	#
+5	# Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
+6	# split alignments support a fusion breakpoint; this script takes that list and
+7	# emits a consensus sequence over each breakpoint region.
+8	#
+9	# For every region in the breakpoint file we run samtools mpileup over only the
+10	# reads in the read-name list and walk the pileup column by column. At each
+11	# column the reference base is used by default; if a single non-reference base
+12	# is seen in more than --threshold fraction of the parsed read bases at that
+13	# column, that base is used instead.
+14	#
+15	# With --guideFile (same input format as guidesToBreakpoints.pl, namely
+16	# "group<TAB>chr:pos<TAB>+/-"), each fusion group's two halves are matched to
+17	# breakpoint regions by chromosome+position, reverse-complemented when the
+18	# guide direction is '-', and concatenated in the order the entries appear in
+19	# the guides file (first entry of the group = 5' partner). One FASTA record is
+20	# emitted per group instead of per region.
+21	#
+22	# Usage:
+23	#   breakpointPileup.pl --reads reads.txt --bam in.bam --ref ref.fa \
+24	#                       --breakpointFile breakpoints.txt \
+25	#                       [--guideFile guides.txt] \
+26	#                       [--threshold 0.5] [--minDepth 1] [--verbose]
+27	#
+28	# The BAM must be coordinate-sorted and indexed, and the FASTA must have a
+29	# matching .fai. The breakpoint file uses the same format as filterEnds.pl:
+30	#   chr15:74318559:74336132;chr17:38428464:38512385
+31	# Each side becomes one FASTA record (or one half of a fused record under
+32	# --guideFile). Lines starting with '#' are ignored.
+33	
+34	use warnings;
+35	use strict;
+36	use Getopt::Long;
+37	
+38	my $readsFile;
+39	my $bamFile;
+40	my $refFile;
+41	my $breakpointFile;
+42	my $guideFile;
+43	my $threshold = 0.5;
+44	my $minDepth  = 1;
+45	my $verbose   = 0;
+46	
+47	GetOptions(
+48	    "reads=s"            => \$readsFile,
+49	    "bam=s"              => \$bamFile,
+50	    "ref=s"              => \$refFile,
+51	    "breakpointFile|b=s" => \$breakpointFile,
+52	    "guideFile|G=s"      => \$guideFile,
+53	    "threshold|t=f"      => \$threshold,
+54	    "minDepth|d=i"       => \$minDepth,
+55	    "verbose|v"          => \$verbose,
+56	) or die "Error in command line arguments\n";
+57	
+58	defined $readsFile      or die "--reads is required\n";
+59	defined $bamFile        or die "--bam is required\n";
+60	defined $refFile        or die "--ref is required\n";
+61	defined $breakpointFile or die "--breakpointFile is required\n";
+62	
+63	my @regions = readRegions($breakpointFile);
+64	@regions or die "no usable regions in $breakpointFile\n";
+65	
+66	my %byRegion;
+67	foreach my $region (@regions) {
+68	    my ($chr, $start, $end) = parseRegion($region);
+69	    my $seq = consensusForRegion($region);
+70	    $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
+71	}
+72	
+73	if (defined $guideFile) {
+74	    emitFusedGroups($guideFile, \%byRegion);
+75	}
+76	else {
+77	    foreach my $region (@regions) {
+78	        emitFasta($region, $byRegion{$region}{seq});
+79	    }
+80	}
+81	
+82	sub consensusForRegion {
+83	    my ($region) = @_;
+84	    my $cmd = sprintf(
+85	        "samtools view -b -N %s %s %s | "
+86	      . "samtools mpileup -aa -A -B -Q 0 -f %s -r %s -",
+87	        shellQuote($readsFile), shellQuote($bamFile), shellQuote($region),
+88	        shellQuote($refFile),   shellQuote($region),
+89	    );
+90	    $verbose and print STDERR "# $cmd\n";
+91	
+92	    open(my $fp, "-|", $cmd) or die "can't run pileup pipeline: $!";
+93	    my $seq = "";
+94	    while (my $line = <$fp>) {
+95	        chomp $line;
+96	        my ($chr, $pos, $ref, $depth, $bases) = split(/\t/, $line);
+97	        $seq .= consensusBase($ref, $depth // 0, $bases // "");
+98	    }
+99	    close($fp);
+100	    return $seq;
+101	}
+102	
+103	sub readRegions {
+104	    my ($file) = @_;
+105	    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+106	    my @out;
+107	    while (my $line = <$fp>) {
+108	        next if substr($line, 0, 1) eq '#';
+109	        chomp $line;
+110	        next if $line =~ /^\s*$/;
+111	        foreach my $half (split /;/, $line) {
+112	            my ($chr, $start, $end) = split /:/, $half;
+113	            next unless defined $chr && length($chr);
+114	            unless (defined $start && length($start)
+115	                 && defined $end   && length($end)) {
+116	                warn "skipping '$half': pileup needs chr:start:end\n";
+117	                next;
+118	            }
+119	            ($start, $end) = ($end, $start) if $start > $end;
+120	            push @out, "$chr:$start-$end";
+121	        }
+122	    }
+123	    close($fp);
+124	    return @out;
+125	}
+126	
+127	sub parseRegion {
+128	    my ($r) = @_;
+129	    $r =~ /^([^:]+):(\d+)-(\d+)$/ or die "bad region '$r'\n";
+130	    return ($1, $2, $3);
+131	}
+132	
+133	sub emitFusedGroups {
+134	    my ($file, $byRegion) = @_;
+135	    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+136	    my %groups;
+137	    my @order;
+138	    while (my $line = <$fp>) {
+139	        next if substr($line, 0, 1) eq '#';
+140	        chomp $line;
+141	        next if $line =~ /^\s*$/;
+142	        my ($group, $loc, $dir) = split /\t/, $line;
+143	        unless (defined $group && defined $loc && defined $dir) {
+144	            warn "skipping malformed guide line: $line\n";
+145	            next;
+146	        }
+147	        $dir =~ s/\s+//g;
+148	        unless ($dir eq '+' || $dir eq '-') {
+149	            warn "skipping guide '$group' $loc: direction must be + or -\n";
+150	            next;
+151	        }
+152	        my ($chr, $pos) = split /:/, $loc;
+153	        unless (defined $chr && defined $pos && $pos =~ /^\d+$/) {
+154	            warn "skipping guide '$group' $loc: expected chr:pos\n";
+155	            next;
+156	        }
+157	        push @order, $group unless exists $groups{$group};
+158	        push @{ $groups{$group} }, { chr => $chr, pos => $pos, dir => $dir };
+159	    }
+160	    close($fp);
+161	
+162	    foreach my $group (@order) {
+163	        my @parts;
+164	        my @anno;
+165	        foreach my $g (@{ $groups{$group} }) {
+166	            my $info = matchRegion($g->{chr}, $g->{pos}, $byRegion);
+167	            unless ($info) {
+168	                warn "no breakpoint region matches guide '$group' $g->{chr}:$g->{pos}\n";
+169	                next;
+170	            }
+171	            my $part = $info->{seq};
+172	            $part = revcomp($part) if $g->{dir} eq '-';
+173	            push @parts, $part;
+174	            push @anno, "$g->{chr}:$info->{start}-$info->{end}$g->{dir}";
+175	        }
+176	        next unless @parts;
+177	        my $fusion = join('', @parts);
+178	        emitFasta("$group " . join(';', @anno), $fusion);
+179	    }
+180	}
+181	
+182	sub matchRegion {
+183	    my ($chr, $pos, $byRegion) = @_;
+184	    my $chrFallback;
+185	    foreach my $r (keys %$byRegion) {
+186	        my $info = $byRegion->{$r};
+187	        next unless $info->{chr} eq $chr;
+188	        $chrFallback ||= $info;
+189	        return $info if $pos >= $info->{start} && $pos <= $info->{end};
+190	    }
+191	    return $chrFallback;
+192	}
+193	
+194	sub emitFasta {
+195	    my ($header, $seq) = @_;
+196	    print ">$header length=", length($seq), "\n";
+197	    for (my $i = 0; $i < length($seq); $i += 80) {
+198	        print substr($seq, $i, 80), "\n";
+199	    }
+200	}
+201	
+202	sub revcomp {
+203	    my ($s) = @_;
+204	    $s =~ tr/ACGTNacgtn/TGCANtgcan/;
+205	    return scalar reverse $s;
+206	}
+207	
+208	# Walks an mpileup bases string, returning the consensus base for the column.
+209	# mpileup encoding: '.'/',' = match to ref; ACGTN (any case) = mismatch;
+210	# '^X' starts a read (X is mapq, skip it); '$' ends a read; '+N<seq>' /
+211	# '-N<seq>' are insertions/deletions to the reference following this column;
+212	# '*'/'#' is a deletion that covers this column.
+213	sub consensusBase {
+214	    my ($ref, $depth, $bases) = @_;
+215	    $ref = uc($ref // 'N');
+216	    return $ref if !$depth || $depth < $minDepth;
+217	    return $ref if !length($bases) || $bases eq '*';
+218	
+219	    my %count;
+220	    my @c = split(//, $bases);
+221	    my $i = 0;
+222	    while ($i <= $#c) {
+223	        my $ch = $c[$i];
+224	        if ($ch eq '^') { $i += 2; next; }
+225	        if ($ch eq '$') { $i += 1; next; }
+226	        if ($ch eq '+' || $ch eq '-') {
+227	            $i++;
+228	            my $n = "";
+229	            while ($i <= $#c && $c[$i] =~ /\d/) { $n .= $c[$i]; $i++; }
+230	            $i += int($n);
+231	            next;
+232	        }
+233	        if ($ch eq '*' || $ch eq '#') { $i++; next; }
+234	        if ($ch eq '.' || $ch eq ',') { $count{$ref}++; $i++; next; }
+235	        $count{uc($ch)}++;
+236	        $i++;
+237	    }
+238	
+239	    my $total = 0;
+240	    foreach my $b (qw(A C G T N)) { $total += $count{$b} if $count{$b}; }
+241	    return $ref if $total == 0;
+242	
+243	    foreach my $b (qw(A C G T)) {
+244	        next if $b eq $ref;
+245	        return $b if defined $count{$b} && $count{$b} / $total > $threshold;
+246	    }
+247	    return $ref;
+248	}
+249	
+250	sub shellQuote {
+251	    my ($s) = @_;
+252	    $s =~ s/'/'\\''/g;
+253	    return "'$s'";
+254	}
+255
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:05:18Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```pl
+#!/usr/bin/perl
+
+# breakpointPileup.pl
+#
+# Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
+# split alignments support a fusion breakpoint; this script takes that list and
+# emits the fusion mRNA sequence one record per breakpoint line.
+#
+# For every region in the breakpoint file we run samtools mpileup over only the
+# reads in the read-name list and walk the pileup column by column. At each
+# column the reference base is used by default; if a single non-reference base
+# is seen in more than --threshold fraction of the parsed read bases at that
+# column, that base is used instead.
+#
+# Each breakpoint file line "regionA;regionB" defines one fusion. By default
+# the strand for each side is taken from the alignment FLAGs of the supporting
+# reads in that region (majority vote of FLAG&0x10 over primary+supplementary,
+# excluding secondary). A side whose majority is reverse-strand is reverse-
+# complemented before sides are concatenated in the order they appear on the
+# line. A warning is emitted when the majority is below --strandThreshold.
+#
+# Pass --guideFile guides.txt (the guidesToBreakpoints.pl input format,
+# "group<TAB>chr:pos<TAB>+/-") to override the BAM-derived strand entirely:
+# in that mode each fusion group's halves are matched to breakpoint regions
+# by chromosome+position, RC'd according to the guide direction, and
+# concatenated in the order the entries appear in the guides file.
+#
+# Usage:
+#   breakpointPileup.pl --reads reads.txt --bam in.bam --ref ref.fa \
+#                       --breakpointFile breakpoints.txt \
+#                       [--guideFile guides.txt] \
+#                       [--threshold 0.5] [--minDepth 1] \
+#                       [--strandThreshold 0.7] [--verbose]
+#
+# The BAM must be coordinate-sorted and indexed, and the FASTA must have a
+# matching .fai. The breakpoint file uses the same format as filterEnds.pl:
+#   chr15:74318559:74336132;chr17:38428464:38512385
+# Lines starting with '#' are ignored.
+
+use warnings;
+use strict;
+use Getopt::Long;
+
+my $readsFile;
+my $bamFile;
+my $refFile;
+my $breakpointFile;
+my $guideFile;
+my $threshold       = 0.5;
+my $minDepth        = 1;
+my $strandThreshold = 0.7;
+my $verbose         = 0;
+
+GetOptions(
+    "reads=s"            => \$readsFile,
+    "bam=s"              => \$bamFile,
+    "ref=s"              => \$refFile,
+    "breakpointFile|b=s" => \$breakpointFile,
+    "guideFile|G=s"      => \$guideFile,
+    "threshold|t=f"      => \$threshold,
+    "minDepth|d=i"       => \$minDepth,
+    "strandThreshold=f"  => \$strandThreshold,
+    "verbose|v"          => \$verbose,
+) or die "Error in command line arguments\n";
+
+defined $readsFile      or die "--reads is required\n";
+defined $bamFile        or die "--bam is required\n";
+defined $refFile        or die "--ref is required\n";
+defined $breakpointFile or die "--breakpointFile is required\n";
+
+my @pairs = readBreakpointPairs($breakpointFile);
+@pairs or die "no usable breakpoint lines in $breakpointFile\n";
+
+my %byRegion;
+foreach my $pair (@pairs) {
+    foreach my $region (@$pair) {
+        next if exists $byRegion{$region};
+        my ($chr, $start, $end) = parseRegion($region);
+        my $seq = consensusForRegion($region);
+        $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
+    }
+}
+
+if (defined $guideFile) {
+    emitFusedGroups($guideFile, \%byRegion);
+}
+else {
+    foreach my $pair (@pairs) {
+        emitFusedPair($pair, \%byRegion);
+    }
+}
+
+sub emitFusedPair {
+    my ($pair, $byRegion) = @_;
+    my @parts;
+    my @anno;
+    foreach my $region (@$pair) {
+        my $info = $byRegion->{$region};
+        my ($fwd, $rev) = strandFromReads($region);
+        my $total = $fwd + $rev;
+        my ($dir, $reverseSide);
+        if ($total == 0) {
+            warn "no supporting reads on $region; assuming + strand\n";
+            $dir = '+'; $reverseSide = 0;
+        }
+        else {
+            $reverseSide = $rev > $fwd;
+            $dir = $reverseSide ? '-' : '+';
+            my $conf = ($reverseSide ? $rev : $fwd) / $total;
+            if ($conf < $strandThreshold) {
+                warn sprintf("weak strand call on %s: %d+/%d- (%.0f%% %s)\n",
+                             $region, $fwd, $rev, 100 * $conf, $dir);
+            }
+        }
+        my $seq = $info->{seq};
+        $seq = revcomp($seq) if $reverseSide;
+        push @parts, $seq;
+        push @anno, "$region$dir";
+    }
+    emitFasta(join(';', @anno), join('', @parts));
+}
+
+sub strandFromReads {
+    my ($region) = @_;
+    my $cmd = sprintf(
+        "samtools view -F 0x100 -N %s %s %s",
+        shellQuote($readsFile), shellQuote($bamFile), shellQuote($region),
+    );
+    $verbose and print STDERR "# $cmd\n";
+    open(my $fp, "-|", $cmd) or die "can't count strand: $!";
+    my ($fwd, $rev) = (0, 0);
+    while (my $line = <$fp>) {
+        my $flag = (split /\t/, $line, 3)[1];
+        next unless defined $flag;
+        if ($flag & 16) { $rev++; } else { $fwd++; }
+    }
+    close($fp);
+    return ($fwd, $rev);
+}
+
+sub consensusForRegion {
+    my ($region) = @_;
+    my $cmd = sprintf(
+        "samtools view -b -N %s %s %s | "
+      . "samtools mpileup -aa -A -B -Q 0 -f %s -r %s -",
+        shellQuote($readsFile), shellQuote($bamFile), shellQuote($region),
+        shellQuote($refFile),   shellQuote($region),
+    );
+    $verbose and print STDERR "# $cmd\n";
+
+    open(my $fp, "-|", $cmd) or die "can't run pileup pipeline: $!";
+    my $seq = "";
+    while (my $line = <$fp>) {
+        chomp $line;
+        my ($chr, $pos, $ref, $depth, $bases) = split(/\t/, $line);
+        $seq .= consensusBase($ref, $depth // 0, $bases // "");
+    }
+    close($fp);
+    return $seq;
+}
+
+sub readBreakpointPairs {
+    my ($file) = @_;
+    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+    my @pairs;
+    while (my $line = <$fp>) {
+        next if substr($line, 0, 1) eq '#';
+        chomp $line;
+        next if $line =~ /^\s*$/;
+        my @sides;
+        foreach my $half (split /;/, $line) {
+            my ($chr, $start, $end) = split /:/, $half;
+            next unless defined $chr && length($chr);
+            unless (defined $start && length($start)
+                 && defined $end   && length($end)) {
+                warn "skipping '$half' on '$line': pileup needs chr:start:end\n";
+                next;
+            }
+            ($start, $end) = ($end, $start) if $start > $end;
+            push @sides, "$chr:$start-$end";
+        }
+        push @pairs, \@sides if @sides;
+    }
+    close($fp);
+    return @pairs;
+}
+
+sub parseRegion {
+    my ($r) = @_;
+    $r =~ /^([^:]+):(\d+)-(\d+)$/ or die "bad region '$r'\n";
+    return ($1, $2, $3);
+}
+
+sub emitFusedGroups {
+    my ($file, $byRegion) = @_;
+    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+    my %groups;
+    my @order;
+    while (my $line = <$fp>) {
+        next if substr($line, 0, 1) eq '#';
+        chomp $line;
+        next if $line =~ /^\s*$/;
+        my ($group, $loc, $dir) = split /\t/, $line;
+        unless (defined $group && defined $loc && defined $dir) {
+            warn "skipping malformed guide line: $line\n";
+            next;
+        }
+        $dir =~ s/\s+//g;
+        unless ($dir eq '+' || $dir eq '-') {
+            warn "skipping guide '$group' $loc: direction must be + or -\n";
+            next;
+        }
+        my ($chr, $pos) = split /:/, $loc;
+        unless (defined $chr && defined $pos && $pos =~ /^\d+$/) {
+            warn "skipping guide '$group' $loc: expected chr:pos\n";
+            next;
+        }
+        push @order, $group unless exists $groups{$group};
+        push @{ $groups{$group} }, { chr => $chr, pos => $pos, dir => $dir };
+    }
+    close($fp);
+
+    foreach my $group (@order) {
+        my @parts;
+        my @anno;
+        foreach my $g (@{ $groups{$group} }) {
+            my $info = matchRegion($g->{chr}, $g->{pos}, $byRegion);
+            unless ($info) {
+                warn "no breakpoint region matches guide '$group' $g->{chr}:$g->{pos}\n";
+                next;
+            }
+            my $part = $info->{seq};
+            $part = revcomp($part) if $g->{dir} eq '-';
+            push @parts, $part;
+            push @anno, "$g->{chr}:$info->{start}-$info->{end}$g->{dir}";
+        }
+        next unless @parts;
+        emitFasta("$group " . join(';', @anno), join('', @parts));
+    }
+}
+
+sub matchRegion {
+    my ($chr, $pos, $byRegion) = @_;
+    my $chrFallback;
+    foreach my $r (keys %$byRegion) {
+        my $info = $byRegion->{$r};
+        next unless $info->{chr} eq $chr;
+        $chrFallback ||= $info;
+        return $info if $pos >= $info->{start} && $pos <= $info->{end};
+    }
+    return $chrFallback;
+}
+
+sub emitFasta {
+    my ($header, $seq) = @_;
+    print ">$header length=", length($seq), "\n";
+    for (my $i = 0; $i < length($seq); $i += 80) {
+        print substr($seq, $i, 80), "\n";
+    }
+}
+
+sub revcomp {
+    my ($s) = @_;
+    $s =~ tr/ACGTNacgtn/TGCANtgcan/;
+    return scalar reverse $s;
+}
+
+# Walks an mpileup bases string, returning the consensus base for the column.
+# mpileup encoding: '.'/',' = match to ref; ACGTN (any case) = mismatch;
+# '^X' starts a read (X is mapq, skip it); '$' ends a read; '+N<seq>' /
+# '-N<seq>' are insertions/deletions to the reference following this column;
+# '*'/'#' is a deletion that covers this column.
+sub consensusBase {
+    my ($ref, $depth, $bases) = @_;
+    $ref = uc($ref // 'N');
+    return $ref if !$depth || $depth < $minDepth;
+    return $ref if !length($bases) || $bases eq '*';
+
+    my %count;
+    my @c = split(//, $bases);
+    my $i = 0;
+    while ($i <= $#c) {
+        my $ch = $c[$i];
+        if ($ch eq '^') { $i += 2; next; }
+        if ($ch eq '$') { $i += 1; next; }
+        if ($ch eq '+' || $ch eq '-') {
+            $i++;
+            my $n = "";
+            while ($i <= $#c && $c[$i] =~ /\d/) { $n .= $c[$i]; $i++; }
+            $i += int($n);
+            next;
+        }
+        if ($ch eq '*' || $ch eq '#') { $i++; next; }
+        if ($ch eq '.' || $ch eq ',') { $count{$ref}++; $i++; next; }
+        $count{uc($ch)}++;
+        $i++;
+    }
+
+    my $total = 0;
+    foreach my $b (qw(A C G T N)) { $total += $count{$b} if $count{$b}; }
+    return $ref if $total == 0;
+
+    foreach my $b (qw(A C G T)) {
+        next if $b eq $ref;
+        return $b if defined $count{$b} && $count{$b} / $total > $threshold;
+    }
+    return $ref;
+}
+
+sub shellQuote {
+    my ($s) = @_;
+    $s =~ s/'/'\\''/g;
+    return "'$s'";
+}
+
+```
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:05:21Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Syntax-check the script
+
+`perl -c /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl`
+
+```text
+/home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl syntax OK
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:05:33Z)**_
+
+Updated [bin/breakpointPileup.pl](bin/breakpointPileup.pl). New default behavior:
+
+- The breakpoint file is read as **pairs**, line by line: each `regionA;regionB` line = one fusion. Pileup runs once per unique region (deduped across pairs).
+- For each side of a pair, `samtools view -F 0x100 -N reads.txt bam region` walks the supporting reads (primary + supplementary, no secondary) and counts FLAG&0x10. Reverse-strand majority → that side's consensus is reverse-complemented.
+- Sides are concatenated in line order; one FASTA record per breakpoint line, header annotated like `chr15:…+;chr17:…-`.
+- A weak-call warning is emitted to stderr when the winning fraction is below `--strandThreshold` (default `0.7`).
+
+`--guideFile` still works exactly as before — passing it switches to guide-driven direction and grouping, fully overriding the BAM-derived call.
+
+```
+bin/filterEnds.pl --first first.bam --last last.bam -b breakpoints.txt > reads.txt
+bin/breakpointPileup.pl --reads reads.txt --bam all.bam --ref ref.fa \
+                       -b breakpoints.txt > fusion.fa
+```
+
+One thing I haven't done: I'm trusting that line order in the breakpoint file = 5'→3' transcript order. If your breakpoint file is hand-curated and that convention isn't enforced, the two halves will be concatenated correctly oriented but possibly swapped. The `findBreakPoints` logic in `filterEnds.pl` already writes them 5'→3', so if your breakpoint file came out of that path you're fine.
+
+---
+
+_**User (2026-04-28 08:06:32Z)**_
+
+The breakpoints are not hand curated - they come from alternate alignments and matching the cigars. Then it is a majority rule situation
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 08:07:33Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:07:36Z)**_
+
+Right — and looking back at `findBreakPoints` in [filterEnds.pl](bin/filterEnds.pl#L292-L347), when an alignment is reverse-strand the coordinates are emitted swapped (`@mainRefPos[0,1]=@mainRefPos[1,0]`), so the **order of `start:end` in each side already encodes strand**: `start < end` means `+`, `start > end` means `-`. Since the breakpoint file is the majority-rule consensus over reads, that ordering is itself the majority answer.
+
+I'll trust the breakpoint file's coord order for strand, drop the FLAG-counting pass, and reduce `--guideFile` to a pure override.
+
+_**Agent (claude-opus-4-7 2026-04-28 08:07:50Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:07:57Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:08:06Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:08:22Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:08:33Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:08:36Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Syntax-check after edits
+
+`perl -c /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl`
+
+```text
+/home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl syntax OK
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:08:45Z)**_
+
+Updated. Now [bin/breakpointPileup.pl](bin/breakpointPileup.pl):
+
+- Parses each breakpoint side and reads strand directly from coord order: `start < end` → `+`, `start > end` → `-`. The pileup uses `min:max` for the region; the direction sticks to the side and drives RC after consensus.
+- No more `samtools view` strand-counting pass — we trust the upstream majority-rule output.
+- Output stays one FASTA record per breakpoint line, header annotated like `chr15:74318559-74336132+;chr17:38428464-38512385-`.
+- `--guideFile` is unchanged: pass it to override the file's encoded direction entirely.
+- Dropped the now-irrelevant `--strandThreshold` option.
+
+Sanity check: a hand-written breakpoint file (with `start<end` always) will treat every side as `+`, so anything that came from `findBreakPoints` Just Works, and anything hand-curated will need `--guideFile` to fix orientation.
+
+---
+
+_**User (2026-04-28 08:09:52Z)**_
+
+The matches have to be correctly stranded for the breakpoint to be idenified so there should be no worries about that.
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:07Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:08Z)**_
+
+Good to know — I'll drop the caveat. The script as it stands trusts the encoding, which matches the pipeline's actual guarantees.
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:09Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+List existing memory files
+
+`ls /home/lhhung/.claude/projects/-home-lhhung-fast-fusion-finder/memory/ 2>/dev/null`
+
+```text
+Exit code 2
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:13Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check memory directory layout
+
+`ls -la /home/lhhung/.claude/projects/-home-lhhung-fast-fusion-finder/ 2>&1 | head; ls -la /home/lhhung/.claude/projects/ 2>&1 | head -20`
+
+```text
+total 436
+drwxrwxr-x  2 lhhung lhhung   4096 Apr 28 07:56 .
+drwxrwxr-x 12 lhhung lhhung   4096 Apr 28 07:52 ..
+-rw-------  1 lhhung lhhung 434148 Apr 28 08:10 0f61122e-fb9d-4fd7-8aff-9fbe2fccde81.jsonl
+total 48
+drwxrwxr-x 12 lhhung lhhung 4096 Apr 28 07:52 .
+drwx------ 12 lhhung lhhung 4096 Apr 28 00:22 ..
+drwxrwxr-x  2 lhhung lhhung 4096 Apr 28 07:56 -home-lhhung-fast-fusion-finder
+drwxrwxr-x 10 lhhung lhhung 4096 Apr 27 08:32 -mnt-pikachu-agentic-repo-coordinator
+drwxrwxr-x  3 lhhung lhhung 4096 Apr  8 15:40 -mnt-pikachu-bwb-agent
+drwxrwxr-x  7 lhhung lhhung 4096 Apr 10 17:02 -mnt-pikachu-bwb-nextflow-utils
+drwxrwxr-x  3 lhhung lhhung 4096 Apr 26 17:26 -mnt-pikachu-libMACS3
+drwxrwxr-x  4 lhhung lhhung 4096 Apr 22 04:26 -mnt-pikachu-multiomic-atac-scrna
+drwxrwxr-x  8 lhhung lhhung 4096 Apr 26 06:44 -mnt-pikachu-STAR-suite
+drwxrwxr-x  4 lhhung lhhung 4096 Apr 13 23:44 -mnt-pikachu-star-suite-paper
+drwxrwxr-x  5 lhhung lhhung 4096 Apr  8 15:19 -mnt-pikachu-temporal-scheduler
+drwxrwxr-x  5 lhhung lhhung 4096 Apr 22 09:36 -mnt-pikachu-ucsf-perturb-analysis
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:20Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:21Z)**_
+
+Worth saving — this is a non-obvious invariant about the breakpoint file format that I'd otherwise re-question on future tasks.
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:31Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```md
+---
+name: breakpoint-file-strand-encoding
+description: fast_fusion_finder breakpoint files encode per-side strand via start:end coord order; only correctly-stranded matches reach the file
+type: project
+---
+
+In fast_fusion_finder, the breakpoint file (format `chr:start:end;chr:start:end`, one fusion per line) is generated upstream from split-alignment + CIGAR matching with majority rule. The generator (see `findBreakPoints` in `bin/filterEnds.pl`) emits each side with **start<end for + strand and start>end for - strand** — coordinates are deliberately swapped on reverse-strand alignments. Only correctly-stranded matches survive the matching step, so this encoding is reliable.
+
+**Why:** The user explicitly confirmed "the matches have to be correctly stranded for the breakpoint to be identified so there should be no worries about that." Adding fallback strand detection (e.g., counting BAM FLAG&0x10 majority over supporting reads) duplicates work already done upstream and is unnecessary defensive code.
+
+**How to apply:** When writing or modifying tools that consume the breakpoint file (e.g., `bin/breakpointPileup.pl`), trust the coord order as the strand source. If `start > end` for a side, that side is reverse-strand — RC after pulling consensus, use min/max for the actual region range. Don't add strand-detection fallbacks for hand-curated files; the file's only sanctioned producer is the upstream pipeline.
+
+```
+
+```text
+File created successfully at: /home/lhhung/.claude/projects/-home-lhhung-fast-fusion-finder/memory/breakpoint_file_strand_encoding.md
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:36Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```md
+- [Breakpoint file strand encoding](breakpoint_file_strand_encoding.md) — start<end is +, start>end is -; trust it, don't add fallbacks
+
+```
+
+```text
+File created successfully at: /home/lhhung/.claude/projects/-home-lhhung-fast-fusion-finder/memory/MEMORY.md
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:10:38Z)**_
+
+Acknowledged. No code change needed — the script already trusts the encoding. I also saved a project memory so future sessions don't re-litigate this and add unnecessary strand-fallback logic.
+
+---
+
+_**User (2026-04-28 08:13:26Z)**_
+
+commit and push
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:28Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:29Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check git status of working directory
+
+`git -C /home/lhhung/fast_fusion_finder status 2>&1 | head -20`
+
+```text
+On branch master
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   bin/breakpointPileup.pl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:34Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:35Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check recent commits and history of breakpointPileup.pl
+
+`git -C /home/lhhung/fast_fusion_finder log --oneline -5 && echo "---" && git -C /home/lhhung/fast_fusion_finder log --oneline -- bin/breakpointPileup.pl | head`
+
+```text
+7df79ee first commit
+---
+7df79ee first commit
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:38Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check diff sizes
+
+`git -C /home/lhhung/fast_fusion_finder diff --stat bin/breakpointPileup.pl && echo "---specstory---" && git -C /home/lhhung/fast_fusion_finder diff --stat .specstory/`
+
+```text
+ bin/breakpointPileup.pl | 79 +++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 54 insertions(+), 25 deletions(-)
+---specstory---
+ .../2026-04-28_07-52-15Z-look-at-filterends-pl.md  | 900 +++++++++++++++++++++
+ .specstory/statistics.json                         |  10 +-
+ 2 files changed, 905 insertions(+), 5 deletions(-)
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:42Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:43Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check what's in the initial commit
+
+`git -C /home/lhhung/fast_fusion_finder show --stat 7df79ee | head -20`
+
+```text
+commit 7df79eef5e4ccf9b4a6a9a6f361852ab0589fa2b
+Author: lhhunghimself <lhhunghimself@gmail.com>
+Date:   Tue Apr 28 08:00:54 2026 +0000
+
+    first commit
+
+ .specstory/.gitignore                              |    1 +
+ .specstory/.project.json                           |    5 +
+ .specstory/cli/config.toml                         |   79 +
+ .../2026-04-28_07-52-15Z-look-at-filterends-pl.md  | 1549 ++++++++++++++++++++
+ .specstory/statistics.json                         |   13 +
+ bin/breakpointPileup.pl                            |  254 ++++
+ bin/cleanup.sh                                     |   60 +
+ bin/filterEnds.pl                                  |  476 ++++++
+ bin/filterSam.pl                                   |  792 ++++++++++
+ bin/reset.sh                                       |   31 +
+ bin/runBFF.sh                                      |   11 +
+ bin/runDorado.sh                                   |   60 +
+ bin/runIndex.sh                                    |    6 +
+ bin/runMiniMap2.sh                                 |   76 +
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:48Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:48Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check remote and tracking info
+
+`git -C /home/lhhung/fast_fusion_finder remote -v && echo "---" && git -C /home/lhhung/fast_fusion_finder branch -vv`
+
+```text
+origin	git@github.com:lhhunghimself/fast_fusion_finder.git (fetch)
+origin	git@github.com:lhhunghimself/fast_fusion_finder.git (push)
+---
+* master 7df79ee first commit
+```
+</details></tool-use>

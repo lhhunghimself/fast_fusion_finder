@@ -4,7 +4,7 @@
 #
 # Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
 # split alignments support a fusion breakpoint; this script takes that list and
-# emits a consensus sequence over each breakpoint region.
+# emits the fusion mRNA sequence one record per breakpoint line.
 #
 # For every region in the breakpoint file we run samtools mpileup over only the
 # reads in the read-name list and walk the pileup column by column. At each
@@ -12,12 +12,19 @@
 # is seen in more than --threshold fraction of the parsed read bases at that
 # column, that base is used instead.
 #
-# With --guideFile (same input format as guidesToBreakpoints.pl, namely
-# "group<TAB>chr:pos<TAB>+/-"), each fusion group's two halves are matched to
-# breakpoint regions by chromosome+position, reverse-complemented when the
-# guide direction is '-', and concatenated in the order the entries appear in
-# the guides file (first entry of the group = 5' partner). One FASTA record is
-# emitted per group instead of per region.
+# Each breakpoint file line "regionA;regionB" defines one fusion. The
+# breakpoint file is generated upstream by majority rule over split alignments
+# and CIGAR matching, and that generator (see filterEnds.pl::findBreakPoints)
+# encodes strand in the order of each side's coordinates: start<end means '+',
+# start>end means '-'. We trust that encoding: sides with start>end have their
+# pileup consensus reverse-complemented. Sides are then concatenated in the
+# order they appear on the line, producing one FASTA record per fusion.
+#
+# Pass --guideFile guides.txt (the guidesToBreakpoints.pl input format,
+# "group<TAB>chr:pos<TAB>+/-") to override that entirely: in that mode each
+# fusion group's halves are matched to breakpoint regions by chromosome+
+# position, RC'd according to the guide direction, and concatenated in the
+# order the entries appear in the guides file.
 #
 # Usage:
 #   breakpointPileup.pl --reads reads.txt --bam in.bam --ref ref.fa \
@@ -28,8 +35,7 @@
 # The BAM must be coordinate-sorted and indexed, and the FASTA must have a
 # matching .fai. The breakpoint file uses the same format as filterEnds.pl:
 #   chr15:74318559:74336132;chr17:38428464:38512385
-# Each side becomes one FASTA record (or one half of a fused record under
-# --guideFile). Lines starting with '#' are ignored.
+# Lines starting with '#' are ignored.
 
 use warnings;
 use strict;
@@ -60,23 +66,41 @@ defined $bamFile        or die "--bam is required\n";
 defined $refFile        or die "--ref is required\n";
 defined $breakpointFile or die "--breakpointFile is required\n";
 
-my @regions = readRegions($breakpointFile);
-@regions or die "no usable regions in $breakpointFile\n";
+my @pairs = readBreakpointPairs($breakpointFile);
+@pairs or die "no usable breakpoint lines in $breakpointFile\n";
 
 my %byRegion;
-foreach my $region (@regions) {
-    my ($chr, $start, $end) = parseRegion($region);
-    my $seq = consensusForRegion($region);
-    $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
+foreach my $pair (@pairs) {
+    foreach my $side (@$pair) {
+        my $region = $side->{region};
+        next if exists $byRegion{$region};
+        my ($chr, $start, $end) = parseRegion($region);
+        my $seq = consensusForRegion($region);
+        $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
+    }
 }
 
 if (defined $guideFile) {
     emitFusedGroups($guideFile, \%byRegion);
 }
 else {
-    foreach my $region (@regions) {
-        emitFasta($region, $byRegion{$region}{seq});
+    foreach my $pair (@pairs) {
+        emitFusedPair($pair, \%byRegion);
     }
+}
+
+sub emitFusedPair {
+    my ($pair, $byRegion) = @_;
+    my @parts;
+    my @anno;
+    foreach my $side (@$pair) {
+        my $info = $byRegion->{ $side->{region} };
+        my $seq  = $info->{seq};
+        $seq = revcomp($seq) if $side->{dir} eq '-';
+        push @parts, $seq;
+        push @anno, "$side->{region}$side->{dir}";
+    }
+    emitFasta(join(';', @anno), join('', @parts));
 }
 
 sub consensusForRegion {
@@ -100,28 +124,34 @@ sub consensusForRegion {
     return $seq;
 }
 
-sub readRegions {
+sub readBreakpointPairs {
     my ($file) = @_;
     open(my $fp, '<', $file) or die "can't open $file: $!\n";
-    my @out;
+    my @pairs;
     while (my $line = <$fp>) {
         next if substr($line, 0, 1) eq '#';
         chomp $line;
         next if $line =~ /^\s*$/;
+        my @sides;
         foreach my $half (split /;/, $line) {
             my ($chr, $start, $end) = split /:/, $half;
             next unless defined $chr && length($chr);
             unless (defined $start && length($start)
                  && defined $end   && length($end)) {
-                warn "skipping '$half': pileup needs chr:start:end\n";
+                warn "skipping '$half' on '$line': pileup needs chr:start:end\n";
                 next;
             }
-            ($start, $end) = ($end, $start) if $start > $end;
-            push @out, "$chr:$start-$end";
+            my $dir = '+';
+            if ($start > $end) {
+                $dir = '-';
+                ($start, $end) = ($end, $start);
+            }
+            push @sides, { region => "$chr:$start-$end", dir => $dir };
         }
+        push @pairs, \@sides if @sides;
     }
     close($fp);
-    return @out;
+    return @pairs;
 }
 
 sub parseRegion {
@@ -174,8 +204,7 @@ sub emitFusedGroups {
             push @anno, "$g->{chr}:$info->{start}-$info->{end}$g->{dir}";
         }
         next unless @parts;
-        my $fusion = join('', @parts);
-        emitFasta("$group " . join(';', @anno), $fusion);
+        emitFasta("$group " . join(';', @anno), join('', @parts));
     }
 }
 
