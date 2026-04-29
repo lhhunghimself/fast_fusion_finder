@@ -2,11 +2,12 @@
 
 A standalone consensus-sequence builder for fusion breakpoints. Takes the
 read-names list produced by `filterEnds.pl`, plus the original BAM and
-reference, and emits one FASTA record per breakpoint line: per-position
-consensus over the supporting reads (reference base by default, replaced when
-a single non-reference base is seen in more than `--threshold` of the read
-bases at that column), with each side reverse-complemented when the
-breakpoint coordinates indicate the `-` strand.
+reference, and emits **two FASTA records per breakpoint line** — one for
+each side of the fusion, in 5'→3' order — each a per-position consensus
+over the supporting reads (reference base by default, replaced when a
+single non-reference base is seen in more than `--threshold` of the read
+bases at that column). Sides whose breakpoint coordinates encode `-`
+strand are reverse-complemented before output.
 
 The canonical script lives at `bin/breakpointPileup.pl`. The top-level
 `breakpointPileup.pl` is a symlink to it for convenient ad-hoc testing.
@@ -78,9 +79,11 @@ bin/filterEnds.pl --first first.bam --last last.bam \
                      > fusion.fa
 ```
 
-One FASTA record per non-comment line in `breakpoints.txt`. Header is the
-two regions with their resolved strands, e.g.
-`>chr15:74318559-74336132+;chr17:38428464-38512385- length=...`.
+Two FASTA records per non-comment line in `breakpoints.txt` — the 5'
+partner first, then the 3' partner. Each header carries that side's
+region and resolved strand, e.g.
+`>chr15:74318559-74336132+ length=...` followed by
+`>chr17:38428464-38512385- length=...`.
 
 ## Quick smoke test
 

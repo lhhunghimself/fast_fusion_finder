@@ -114,9 +114,12 @@ echo "chr1:51:150;chr2:50:149" >bp1.txt
 "$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
           --window 50 --pileupOut t1.tsv >t1.fa
 
-EXP1="$(repeat A 49)t$G50"   # 49 As + lowercase t (8/10 -> alt) + 50 Gs
-GOT1=$(fasta_seq t1.fa 1)
-assert_eq "test1 fwd+fwd seq with side-1 variant" "$EXP1" "$GOT1"
+EXP1A="$(repeat A 49)t"       # side 1 (5'): 49 As + lowercase t variant
+EXP1B="$G50"                  # side 2 (3'): 50 Gs
+GOT1A=$(fasta_seq t1.fa 1)
+GOT1B=$(fasta_seq t1.fa 2)
+assert_eq "test1 fwd side-1 seq with variant" "$EXP1A" "$GOT1A"
+assert_eq "test1 fwd side-2 seq" "$EXP1B" "$GOT1B"
 
 # TSV at chr1:150 should show consensus 't' with A=2, T=8.
 ROW=$(awk '$1=="chr1" && $2==150' t1.tsv)
@@ -132,9 +135,10 @@ assert_eq "test1 TSV chr2:50 (no variant)" "chr2	50	G	G	10	0	0	10	0" "$ROW"
 "$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
           --window 5 >t2.fa
 
-EXP2="AAAAt$(repeat G 5)"     # 4 As + t + 5 Gs
-GOT2=$(fasta_seq t2.fa 1)
-assert_eq "test2 narrow window anchors on breakpoint" "$EXP2" "$GOT2"
+EXP2A="AAAAt"
+EXP2B="$(repeat G 5)"
+assert_eq "test2 narrow window side 1" "$EXP2A" "$(fasta_seq t2.fa 1)"
+assert_eq "test2 narrow window side 2" "$EXP2B" "$(fasta_seq t2.fa 2)"
 
 # ---- test 3: forward+reverse, variant on the reverse side --------------------
 
@@ -146,20 +150,22 @@ echo "chr1:51:150;chr2:149:100" >bp3.txt
 "$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp3.txt \
           --window 50 --pileupOut t3.tsv >t3.fa
 
-EXP3="${A49}t$(repeat C 49)a"   # side-1 variant t + 49 Cs (RC of 49 Gs) + lowercase a
-GOT3=$(fasta_seq t3.fa 1)
-assert_eq "test3 fwd+rev seq with both-side variants and RC" "$EXP3" "$GOT3"
+EXP3A="${A49}t"                 # side 1 (5' fwd): 49 As + t variant
+EXP3B="$(repeat C 49)a"         # side 2 (3' rev): 49 Cs + a (variant RC'd to lowercase a)
+assert_eq "test3 fwd side-1 seq" "$EXP3A" "$(fasta_seq t3.fa 1)"
+assert_eq "test3 rev side-2 seq RC preserves variant case" "$EXP3B" "$(fasta_seq t3.fa 2)"
 
 # Pileup TSV stays in genomic order, so chr2:100 row should record 't' alt.
 ROW=$(awk '$1=="chr2" && $2==100' t3.tsv)
 assert_eq "test3 TSV chr2:100 (variant on rev side, genomic order)" \
           "chr2	100	G	t	10	0	0	2	8" "$ROW"
 
-# FASTA header should reflect resolved direction per side.
-HEADER=$(awk '/^>/{print; exit}' t3.fa)
-[[ "$HEADER" == *"chr1:101-150+"* && "$HEADER" == *"chr2:100-149-"* ]] \
-    || { echo "FAIL  test3 header: $HEADER"; exit 1; }
-echo "PASS  test3 FASTA header records side strands"
+# Each side's FASTA header should reflect its resolved direction.
+H1=$(awk '/^>/{print; if (++n==1) exit}' t3.fa)
+H2=$(awk '/^>/{n++; if (n==2) {print; exit}}' t3.fa)
+[[ "$H1" == *"chr1:101-150+"* ]] || { echo "FAIL  test3 header 1: $H1"; exit 1; }
+[[ "$H2" == *"chr2:100-149-"* ]] || { echo "FAIL  test3 header 2: $H2"; exit 1; }
+echo "PASS  test3 per-side FASTA headers record strands"
 
 # ---- test 4: zero-coverage falls back to reference ---------------------------
 
@@ -168,9 +174,10 @@ echo "PASS  test3 FASTA header records side strands"
 :>empty_reads.txt
 "$PILEUP" --reads empty_reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
           --window 10 >t4.fa
-EXP4="$(repeat A 10)$(repeat G 10)"
-GOT4=$(fasta_seq t4.fa 1)
-assert_eq "test4 zero-coverage falls back to ref" "$EXP4" "$GOT4"
+EXP4A="$(repeat A 10)"
+EXP4B="$(repeat G 10)"
+assert_eq "test4 zero-coverage side 1 = ref" "$EXP4A" "$(fasta_seq t4.fa 1)"
+assert_eq "test4 zero-coverage side 2 = ref" "$EXP4B" "$(fasta_seq t4.fa 2)"
 
 echo
 echo "all tests passed"

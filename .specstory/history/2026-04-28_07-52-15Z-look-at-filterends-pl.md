@@ -5218,3 +5218,416 @@ Untracked files:
 no changes added to commit (use "git add" and/or "git commit -a")
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:52:31Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push wrapper + Dockerfile change
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add bin/processBreakpointDir.sh widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/processBreakpointDir.sh widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Add processBreakpointDir.sh for batch consensus over a breakpoint dir
+
+bin/processBreakpointDir.sh
+- Iterates each cluster in a BFF "breakpoint_files/"-style directory and
+  runs breakpointPileup.pl per cluster, writing {name}.fa (consensus) and
+  {name}.tsv (per-position counts) into an output dir.
+- Synthesizes a SAM @HD/@SQ header from the reference's .fai so the
+  cluster's headerless .nearby.sam can be sorted+indexed.
+- Auto-detects UCSC vs Ensembl contig naming: if the SAM uses chr-prefixed
+  names but the FAI doesn't, strips chr from RNAME, RNEXT, and the
+  breakpoint-file encoding so mpileup can find the reference.
+- Picks the breakpoint-file row whose (end-of-side-1, start-of-side-2)
+  matches the filename's canonical chrA-posA-chrB-posB pair; falls back
+  to the modal encoding when no row matches. Avoids the lex-order tie
+  break that picked an off-by-one bp on small clusters.
+- Faidx's the FASTA lazily on first run if no .fai is present.
+
+widgets/.../Dockerfiles
+- Bake the wrapper into the BFF image (biodepot/bff:test) alongside the
+  existing scripts. No new dependencies — perl, samtools, bash were
+  already in the image.
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master fa3c645] Add processBreakpointDir.sh for batch consensus over a breakpoint dir
+ 5 files changed, 1324 insertions(+), 5 deletions(-)
+ create mode 100755 bin/processBreakpointDir.sh
+ create mode 100755 widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/processBreakpointDir.sh
+To github.com:lhhunghimself/fast_fusion_finder.git
+   0a4f70b..fa3c645  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:52:35Z)**_
+
+Pushed as `fa3c645`. Five files (+1324/-5) — wrapper script, Dockerfiles copy, Dockerfile ADD line, and the .specstory session deltas. `.vscode/` left untracked.
+
+The image (`biodepot/bff:test`) only exists locally; push to Docker Hub when you want it shareable.
+
+---
+
+_**User (2026-04-29 20:52:50Z)**_
+
+ls
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:52:52Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:52:53Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+List repo root
+
+`ls /home/lhhung/fast_fusion_finder/`
+
+```text
+bin
+breakpointPileup.pl
+fast_fusion_finder.ows
+guidesToBreakpoints.pl
+README.md
+tests
+widgets
+```
+</details></tool-use>
+
+---
+
+_**User (2026-04-29 20:53:23Z)**_
+
+so where are the output files
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:53:26Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:53:26Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+List the test output dir
+
+`ls -la /tmp/bff-out/ 2>&1`
+
+```text
+total 320
+drwxrwxr-x   2 lhhung lhhung   4096 Apr 29 20:50 .
+drwxrwxrwt 605 root   root   294912 Apr 29 20:52 ..
+-rw-r--r--   1 root   root      259 Apr 29 20:50 chr15-74024222-chr17-40346374.fa
+-rw-r--r--   1 root   root     5237 Apr 29 20:50 chr15-74024222-chr17-40346374.tsv
+-rw-r--r--   1 root   root      259 Apr 29 20:50 chr15-74024223-chr17-40346371.fa
+-rw-r--r--   1 root   root     5237 Apr 29 20:50 chr15-74024223-chr17-40346371.tsv
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:53:31Z)**_
+
+In [/tmp/bff-out/](/tmp/bff-out/) — that's the host path I bound to `/out` inside the container during the last test run:
+
+- `chr15-74024222-chr17-40346374.fa` — 200 bp consensus FASTA (one fusion record)
+- `chr15-74024222-chr17-40346374.tsv` — per-position pileup table for that cluster
+- `chr15-74024223-chr17-40346371.fa` / `.tsv` — same for the second cluster
+
+They're owned by `root` because the docker container ran as root and wrote to the bind mount; if you want host-uid-owned outputs, add `-u $(id -u):$(id -g)` to the `docker run`.
+
+---
+
+_**User (2026-04-29 20:54:14Z)**_
+
+Do you have the standalone script that does not use docker and assumes everything is present
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:54:20Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:54:24Z)**_
+
+Yes — [bin/processBreakpointDir.sh](bin/processBreakpointDir.sh) **is** the standalone version. The Docker image is just a convenience wrapper that pre-installs samtools, perl, and `breakpointPileup.pl`. Outside Docker, the script itself is unchanged; it just needs:
+
+- `samtools` 1.12+ on PATH
+- `perl` (with `File::Temp`/`Getopt::Long` from core)
+- `breakpointPileup.pl` on PATH
+
+Easiest way is to put both scripts on PATH for one invocation:
+
+```bash
+PATH="$PWD/bin:$PATH" bin/processBreakpointDir.sh \
+    /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    /tmp/bff-out 100
+```
+
+Let me confirm it works without docker.
+
+_**Agent (claude-opus-4-7 2026-04-29 20:54:28Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Run standalone (no Docker) on real data
+
+```bash
+rm -rf /tmp/bff-out-host && mkdir -p /tmp/bff-out-host && PATH="/home/lhhung/fast_fusion_finder/bin:$PATH" /home/lhhung/fast_fusion_finder/bin/processBreakpointDir.sh \
+    /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    /tmp/bff-out-host 100 2>&1 | tail -10 && echo "---host outputs---" && ls -la /tmp/bff-out-host/
+```
+
+```text
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+ok: chr15-74024222-chr17-40346374 -> /tmp/bff-out-host/chr15-74024222-chr17-40346374.fa, /tmp/bff-out-host/chr15-74024222-chr17-40346374.tsv
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+ok: chr15-74024223-chr17-40346371 -> /tmp/bff-out-host/chr15-74024223-chr17-40346371.fa, /tmp/bff-out-host/chr15-74024223-chr17-40346371.tsv
+processed=2 skipped=0 output=/tmp/bff-out-host
+---host outputs---
+total 320
+drwxrwxr-x   2 lhhung lhhung   4096 Apr 29 20:54 .
+drwxrwxrwt 606 root   root   294912 Apr 29 20:54 ..
+-rw-rw-r--   1 lhhung lhhung    259 Apr 29 20:54 chr15-74024222-chr17-40346374.fa
+-rw-rw-r--   1 lhhung lhhung   5237 Apr 29 20:54 chr15-74024222-chr17-40346374.tsv
+-rw-rw-r--   1 lhhung lhhung    259 Apr 29 20:54 chr15-74024223-chr17-40346371.fa
+-rw-rw-r--   1 lhhung lhhung   5237 Apr 29 20:54 chr15-74024223-chr17-40346371.tsv
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:54:33Z)**_
+
+Same outputs, written to [/tmp/bff-out-host/](/tmp/bff-out-host/), and now owned by your user (`lhhung`) instead of root.
+
+If you want to make this truly hands-off, you can either:
+
+- Symlink both scripts into `/usr/local/bin` or `~/.local/bin` so they're on PATH globally, e.g. `ln -s "$PWD/bin/breakpointPileup.pl" "$PWD/bin/processBreakpointDir.sh" ~/.local/bin/`.
+- Or just always launch via `PATH="$REPO/bin:$PATH"` like above.
+
+---
+
+_**User (2026-04-29 20:57:24Z)**_
+
+In the fa file can you have the two parts of the fusion separately listed as entries
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:14Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:15Z)**_
+
+Sure — easy change. I'll have each side emit as its own FASTA record.
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:18Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:25Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:27Z)**_
+
+Update the script header comment to match:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:37Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:39Z)**_
+
+Now update the test expectations and rerun:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:47Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:58:53Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:09Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:16Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:21Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify and run tests against split-record output
+
+`perl -c /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl && bash /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh 2>&1`
+
+```text
+/home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl syntax OK
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test1 fwd side-1 seq with variant
+PASS  test1 fwd side-2 seq
+PASS  test1 TSV chr1:150
+PASS  test1 TSV chr2:50 (no variant)
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test2 narrow window side 1
+PASS  test2 narrow window side 2
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test3 fwd side-1 seq
+PASS  test3 rev side-2 seq RC preserves variant case
+PASS  test3 TSV chr2:100 (variant on rev side, genomic order)
+PASS  test3 per-side FASTA headers record strands
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test4 zero-coverage side 1 = ref
+PASS  test4 zero-coverage side 2 = ref
+
+all tests passed
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:48Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Sync, rebuild, smoke-test on real data
+
+```bash
+cp /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl && cd /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles && docker build -t biodepot/bff:test . 2>&1 | tail -3 && rm -rf /tmp/bff-out-host/* && PATH="/home/lhhung/fast_fusion_finder/bin:$PATH" /home/lhhung/fast_fusion_finder/bin/processBreakpointDir.sh \
+    /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    /tmp/bff-out-host 100 2>&1 | tail -5 && echo "---outputs---" && head /tmp/bff-out-host/chr15-74024222-chr17-40346374.fa
+```
+
+```text
+#21 writing image sha256:e7093e8b5b5691d4a0b51b4a65dd596e22298ff67bc635b7ec07b61d7baabb96 done
+#21 naming to docker.io/biodepot/bff:test 0.0s done
+#21 DONE 0.3s
+ok: chr15-74024222-chr17-40346374 -> /tmp/bff-out-host/chr15-74024222-chr17-40346374.fa, /tmp/bff-out-host/chr15-74024222-chr17-40346374.tsv
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+ok: chr15-74024223-chr17-40346371 -> /tmp/bff-out-host/chr15-74024223-chr17-40346371.fa, /tmp/bff-out-host/chr15-74024223-chr17-40346371.tsv
+processed=2 skipped=0 output=/tmp/bff-out-host
+---outputs---
+>15:74024123-74024222+ length=100
+GAGAGTCTCCAGGAGTCTTTGACTAAATCTCCAAGCTGGAATGTGAGCTCTGAGCAGCTAGTATAGGATGCCCTTACTGG
+GAAAGGGGAGGGAGGCTATG
+>17:40346374-40346473+ length=100
+GAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCAGTGCCTTCTTCCTCTGCTTGTCGGAATGCT
+GACCAAGATTCTAGGCCATG
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:54Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:55Z)**_
+
+Each side is now its own FASTA record. Let me also fix the README and the in-repo Dockerfiles copy is already synced. README:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:59:56Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Find README sections to update
+
+`grep -n "FASTA\|consensus\|record\|concat\|junction" /home/lhhung/fast_fusion_finder/README.md`
+
+```text
+3:A standalone consensus-sequence builder for fusion breakpoints. Takes the
+5:reference, and emits one FASTA record per breakpoint line: per-position
+6:consensus over the supporting reads (reference base by default, replaced when
+42:3. **`--ref ref.fa`** — the reference FASTA used for alignment. Must have
+56:  reverse-complemented per the guide direction, and concatenated in the
+73:# 2. Build the fusion FASTA.
+81:One FASTA record per non-comment line in `breakpoints.txt`. Header is the
+101:If `reads.txt` is empty, every consensus column will fall back to the
+102:reference base, so the output FASTA is the reference sequence over each
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:00:04Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:00:09Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+**Input:**
+
+- file_path: `/home/lhhung/fast_fusion_finder/README.md`
+- new_string:
+
+```
+Two FASTA records per non-comment line in `breakpoints.txt` — the 5'
+partner first, then the 3' partner. Each header carries that side's
+region and resolved strand, e.g.
+`>chr15:74318559-74336132+ length=...` followed by
+`>chr17:38428464-38512385- length=...`.
+```
+
+- old_string:
+
+```
+One FASTA record per non-comment line in `breakpoints.txt`. Header is the
+two regions with their resolved strands, e.g.
+`>chr15:74318559-74336132+;chr17:38428464-38512385- length=...`.
+```
+
+- replace_all: `false`
+
+</details></tool-use>

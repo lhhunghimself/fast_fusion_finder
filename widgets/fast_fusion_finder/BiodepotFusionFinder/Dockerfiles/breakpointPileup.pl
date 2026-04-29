@@ -4,8 +4,8 @@
 #
 # Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
 # split alignments support a fusion breakpoint; this script takes that list
-# and emits the fusion mRNA sequence — windowed around the breakpoint — one
-# record per breakpoint line.
+# and emits the two halves of the fusion as separate FASTA records, each
+# windowed around the breakpoint.
 #
 # Per side, the breakpoint position comes from the breakpoint file itself:
 # the second coord of side 1 (5' partner) and the first coord of side 2
@@ -14,7 +14,7 @@
 # transcript-internal flank of the breakpoint:
 #   5' partner: the W bases ending at the breakpoint in transcript order
 #   3' partner: the W bases starting at the breakpoint in transcript order
-# so the concatenated record is a 2*W-base window centered on the junction.
+# Output is one FASTA record per side, in line order (5' first, 3' second).
 #
 # At each pileup column the reference base is used by default; if a single
 # non-reference base is seen in more than --threshold fraction of the parsed
@@ -114,16 +114,12 @@ close($pileupFh) if $pileupFh;
 
 sub emitFusedPair {
     my ($pair, $byRegion) = @_;
-    my @parts;
-    my @anno;
     foreach my $side (@$pair) {
         my $info = $byRegion->{ $side->{region} };
         my $seq  = $info->{seq};
         $seq = revcomp($seq) if $side->{dir} eq '-';
-        push @parts, $seq;
-        push @anno, "$side->{region}$side->{dir}";
+        emitFasta("$side->{region}$side->{dir}", $seq);
     }
-    emitFasta(join(';', @anno), join('', @parts));
 }
 
 sub consensusForRegion {
@@ -254,21 +250,16 @@ sub emitFusedGroups {
     close($fp);
 
     foreach my $group (@order) {
-        my @parts;
-        my @anno;
         foreach my $g (@{ $groups{$group} }) {
             my $info = matchRegion($g->{chr}, $g->{pos}, $byRegion);
             unless ($info) {
                 warn "no breakpoint region matches guide '$group' $g->{chr}:$g->{pos}\n";
                 next;
             }
-            my $part = $info->{seq};
-            $part = revcomp($part) if $g->{dir} eq '-';
-            push @parts, $part;
-            push @anno, "$g->{chr}:$info->{start}-$info->{end}$g->{dir}";
+            my $seq = $info->{seq};
+            $seq = revcomp($seq) if $g->{dir} eq '-';
+            emitFasta("$group $g->{chr}:$info->{start}-$info->{end}$g->{dir}", $seq);
         }
-        next unless @parts;
-        emitFasta("$group " . join(';', @anno), join('', @parts));
     }
 }
 
