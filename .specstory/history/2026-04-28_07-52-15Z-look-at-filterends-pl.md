@@ -5994,3 +5994,286 @@ Untracked files:
 no changes added to commit (use "git add" and/or "git commit -a")
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:04:11Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push README rewrite
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add README.md .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Rewrite README as full usage documentation
+
+Cover the two entry points (breakpointPileup.pl + processBreakpointDir.sh),
+three run modes (Docker, standalone, BFF widget pipeline), required vs
+optional flags for each, the per-side FASTA + per-position TSV output
+shape, and the conventions the script trusts (strand-from-coord-order,
+bp-per-side, window placement, lowercase variants).
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master 885f65b] Rewrite README as full usage documentation
+ 3 files changed, 583 insertions(+), 126 deletions(-)
+ rewrite README.md (95%)
+To github.com:lhhunghimself/fast_fusion_finder.git
+   1fd9bf0..885f65b  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:04:13Z)**_
+
+Pushed as `885f65b`.
+
+---
+
+_**User (2026-04-29 21:05:31Z)**_
+
+Can you also write me a utility in awk/bash for portability that takes a file of readnames and a fastq file and extracts their sequences as fasta entries with the name of the read being the readname
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:12Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:13Z)**_
+
+Sure — `bin/extractReadsFasta.sh`, plain awk + bash with `zcat` for gzipped FASTQ. Let me write it and exercise it on real data.
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:27Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```sh
+#!/usr/bin/env bash
+# extractReadsFasta.sh — pull reads by name from a FASTQ and emit them as FASTA.
+#
+# Usage:
+#   extractReadsFasta.sh NAMES_FILE FASTQ [FASTQ ...]  > out.fa
+#
+# - NAMES_FILE is a text file of read names. Only the first whitespace-
+#   separated field of each line is consulted, so a TSV (e.g. the
+#   .readnamescoords used elsewhere in this repo: "name<TAB>chr:s:e;...")
+#   works without preprocessing. Lines starting with '#' are ignored.
+# - FASTQ may be plain or gzipped (auto-detected by the '.gz' suffix).
+# - Multiple FASTQs can be passed; they're concatenated in the order
+#   given. Output records appear in FASTQ order (not names-file order).
+# - Names not found in any FASTQ are listed on stderr at the end.
+# - Read-name comparison strips the leading '@' and any trailing
+#   whitespace+comment from the FASTQ header line, so headers like
+#   "@abc123 length=12345 ..." match the bare name "abc123".
+#
+# Portability: works with gawk or mawk, requires only POSIX awk
+# features. No Perl, no Python, no samtools. zcat is needed only for
+# gzipped inputs.
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+    echo "usage: $0 NAMES_FILE FASTQ [FASTQ ...] > out.fa" >&2
+    exit 1
+fi
+
+names=$1
+shift
+
+[[ -f "$names" ]] || { echo "names file not found: $names" >&2; exit 1; }
+
+# Concatenate every FASTQ (decompressing .gz on the fly) into one stream
+# and let awk pluck the wanted records out of it.
+{
+    for f in "$@"; do
+        [[ -f "$f" ]] || { echo "fastq not found: $f" >&2; exit 1; }
+        case "$f" in
+            *.gz)  zcat -- "$f";;
+            *)     cat  -- "$f";;
+        esac
+    done
+} | awk -v namesFile="$names" '
+BEGIN {
+    nWanted = 0
+    while ((getline line < namesFile) > 0) {
+        sub(/^[[:space:]]+/, "", line)
+        if (line == "" || substr(line, 1, 1) == "#") continue
+        n = split(line, parts, /[[:space:]]+/)
+        if (parts[1] != "" && !(parts[1] in wanted)) {
+            wanted[parts[1]] = 1
+            nWanted++
+        }
+    }
+    close(namesFile)
+    if (nWanted == 0) {
+        print "no read names parsed from " namesFile > "/dev/stderr"
+        exit 1
+    }
+}
+
+# Walk the concatenated FASTQ four lines at a time. Sequence lines never
+# start with "@" by spec, but quality lines can; reading exactly four
+# lines from a known "@" header keeps us in sync.
+{
+    if (substr($0, 1, 1) != "@") next
+    name = substr($0, 2)
+    sub(/[[:space:]].*$/, "", name)
+    if ((getline seq)  <= 0) exit
+    if ((getline plus) <= 0) exit
+    if ((getline qual) <= 0) exit
+    if (name in wanted && !(name in seen)) {
+        print ">" name
+        print seq
+        seen[name] = 1
+        nFound++
+    }
+}
+
+END {
+    if (nFound + 0 < nWanted) {
+        for (n in wanted) {
+            if (!(n in seen)) print "missing: " n > "/dev/stderr"
+        }
+        printf("extracted %d/%d reads\n", nFound + 0, nWanted) > "/dev/stderr"
+    }
+}
+'
+
+```
+
+```text
+File created successfully at: /home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:30Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Make executable, syntax-check
+
+`chmod +x /home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh && bash -n /home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh && echo "syntax ok"`
+
+```text
+syntax ok
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:35Z)**_
+
+Smoke test on a synthetic FASTQ:
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:46Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Run smoke tests
+
+```bash
+cd /tmp && cat >toy.fq <<'EOF'
+@read1 description here
+ACGTACGTAC
++
+IIIIIIIIII
+@read2 anything
+TTTTGGGGCC
++
+@@@@@@@@@@
+@read3
+NNNNNNNNNN
++
+##########
+EOF
+printf 'read1\nread3 ignored_extra_col\n# this is a comment\nread_missing\n' > names.txt
+echo "=== plain ==="
+/home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh names.txt toy.fq
+echo "=== gz ==="
+gzip -kf toy.fq
+/home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh names.txt toy.fq.gz
+echo "=== TSV names file (.readnamescoords-style) ==="
+printf 'read2\tchr1:1:100;chr2:1:100\n' > tsv_names.txt
+/home/lhhung/fast_fusion_finder/bin/extractReadsFasta.sh tsv_names.txt toy.fq
+```
+
+```text
+=== plain ===
+missing: read_missing
+extracted 2/3 reads
+>read1
+ACGTACGTAC
+>read3
+NNNNNNNNNN
+=== gz ===
+missing: read_missing
+extracted 2/3 reads
+>read1
+ACGTACGTAC
+>read3
+NNNNNNNNNN
+=== TSV names file (.readnamescoords-style) ===
+>read2
+TTTTGGGGCC
+Shell cwd was reset to /home/lhhung/fast_fusion_finder
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:06:53Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:07:01Z)**_
+
+[bin/extractReadsFasta.sh](bin/extractReadsFasta.sh) is in place. Three smoke tests all clean:
+
+- **Plain FASTQ**: pulled the two requested reads, missing one reported on stderr, comment line in names file ignored.
+- **Gzipped FASTQ**: `zcat` auto-handled by the `.gz` case.
+- **TSV names file** (e.g. a `.readnamescoords` row like `read2<TAB>chr1:1:100;chr2:1:100`): the awk only reads the first whitespace-separated field, so the existing BFF naming files work without preprocessing.
+
+Quality lines starting with `@` (which they did in the test — `@@@@@@@@@@`) didn't confuse the parser, since the FASTQ walker advances exactly four lines per record from a known header position.
+
+Usage:
+
+```bash
+bin/extractReadsFasta.sh reads.txt run.fastq.gz [run2.fastq ...]  > out.fa
+# or with one of the BFF coords files:
+bin/extractReadsFasta.sh /mnt/pikachu/bff-test/breakpoint_files/chr15-74024222-chr17-40346374.nearby.readnamescoords \
+    /path/to/run.fastq.gz > cluster.fa
+```
+
+Portability footnote: only POSIX awk features used (`[[:space:]]`, `sub`, `getline file`, `> "/dev/stderr"`) — works with both gawk and mawk. Only external dep is `zcat`, used only when an input ends in `.gz`.
+
+Want me to commit and push?
+
+---
+
+_**User (2026-04-29 21:29:29Z)**_
+
+commit and push
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 21:29:31Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:29:32Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check current state
+
+`git -C /home/lhhung/fast_fusion_finder status`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/
+	bin/extractReadsFasta.sh
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+</details></tool-use>
