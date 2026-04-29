@@ -3,32 +3,37 @@
 # breakpointPileup.pl
 #
 # Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
-# split alignments support a fusion breakpoint; this script takes that list and
-# emits the fusion mRNA sequence one record per breakpoint line.
+# split alignments support a fusion breakpoint; this script takes that list
+# and emits the fusion mRNA sequence — windowed around the breakpoint — one
+# record per breakpoint line.
 #
-# For every region in the breakpoint file we run samtools mpileup over only the
-# reads in the read-name list and walk the pileup column by column. At each
-# column the reference base is used by default; if a single non-reference base
-# is seen in more than --threshold fraction of the parsed read bases at that
-# column, that base is used instead.
+# Per side, the breakpoint position comes from the breakpoint file itself:
+# the second coord of side 1 (5' partner) and the first coord of side 2
+# (3' partner), matching the convention findBreakPoints uses to write them.
+# Each side is then piled up over a window of --window bases on the
+# transcript-internal flank of the breakpoint:
+#   5' partner: the W bases ending at the breakpoint in transcript order
+#   3' partner: the W bases starting at the breakpoint in transcript order
+# so the concatenated record is a 2*W-base window centered on the junction.
 #
-# Each breakpoint file line "regionA;regionB" defines one fusion. The
-# breakpoint file is generated upstream by majority rule over split alignments
-# and CIGAR matching, and that generator (see filterEnds.pl::findBreakPoints)
-# encodes strand in the order of each side's coordinates: start<end means '+',
-# start>end means '-'. We trust that encoding: sides with start>end have their
-# pileup consensus reverse-complemented. Sides are then concatenated in the
-# order they appear on the line, producing one FASTA record per fusion.
+# At each pileup column the reference base is used by default; if a single
+# non-reference base is seen in more than --threshold fraction of the parsed
+# read bases at that column, that base is used instead and emitted in lower
+# case. Reverse-complementing for - strand sides preserves case.
 #
-# Pass --guideFile guides.txt (the guidesToBreakpoints.pl input format,
-# "group<TAB>chr:pos<TAB>+/-") to override that entirely: in that mode each
-# fusion group's halves are matched to breakpoint regions by chromosome+
-# position, RC'd according to the guide direction, and concatenated in the
-# order the entries appear in the guides file.
+# Strand per side comes from the start:end coord order in the breakpoint
+# file: start<end is +, start>end is - (the upstream majority-rule generator
+# only emits correctly stranded matches). --guideFile overrides that.
+#
+# --pileupOut writes a per-position TSV (chr, pos, ref, consensus, depth,
+# A, C, G, T) for every pileup column visited. Genomic order, one row per
+# column. The "consensus" column matches what goes into the FASTA, so
+# uppercase = ref, lowercase = called variant.
 #
 # Usage:
 #   breakpointPileup.pl --reads reads.txt --bam in.bam --ref ref.fa \
 #                       --breakpointFile breakpoints.txt \
+#                       [--window 100] [--pileupOut variants.tsv] \
 #                       [--guideFile guides.txt] \
 #                       [--threshold 0.5] [--minDepth 1] [--verbose]
 #
@@ -40,14 +45,17 @@
 use warnings;
 use strict;
 use Getopt::Long;
+use File::Temp qw(tempdir);
 
 my $readsFile;
 my $bamFile;
 my $refFile;
 my $breakpointFile;
 my $guideFile;
+my $pileupOut;
 my $threshold = 0.5;
 my $minDepth  = 1;
+my $window    = 100;
 my $verbose   = 0;
 
 GetOptions(
@@ -56,8 +64,10 @@ GetOptions(
     "ref=s"              => \$refFile,
     "breakpointFile|b=s" => \$breakpointFile,
     "guideFile|G=s"      => \$guideFile,
+    "pileupOut=s"        => \$pileupOut,
     "threshold|t=f"      => \$threshold,
     "minDepth|d=i"       => \$minDepth,
+    "window|w=i"         => \$window,
     "verbose|v"          => \$verbose,
 ) or die "Error in command line arguments\n";
 
@@ -65,6 +75,16 @@ defined $readsFile      or die "--reads is required\n";
 defined $bamFile        or die "--bam is required\n";
 defined $refFile        or die "--ref is required\n";
 defined $breakpointFile or die "--breakpointFile is required\n";
+$window > 0             or die "--window must be positive\n";
+
+my $pileupFh;
+if (defined $pileupOut) {
+    open($pileupFh, '>', $pileupOut) or die "can't write $pileupOut: $!\n";
+    print $pileupFh "#chr\tpos\tref\tconsensus\tdepth\tA\tC\tG\tT\n";
+}
+
+my $tmpDir     = tempdir(CLEANUP => 1);
+my $tmpCounter = 0;
 
 my @pairs = readBreakpointPairs($breakpointFile);
 @pairs or die "no usable breakpoint lines in $breakpointFile\n";
@@ -72,10 +92,11 @@ my @pairs = readBreakpointPairs($breakpointFile);
 my %byRegion;
 foreach my $pair (@pairs) {
     foreach my $side (@$pair) {
+        $side->{region} = windowForSide($side);
         my $region = $side->{region};
         next if exists $byRegion{$region};
         my ($chr, $start, $end) = parseRegion($region);
-        my $seq = consensusForRegion($region);
+        my $seq = consensusForRegion($region, $pileupFh);
         $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
     }
 }
@@ -88,6 +109,8 @@ else {
         emitFusedPair($pair, \%byRegion);
     }
 }
+
+close($pileupFh) if $pileupFh;
 
 sub emitFusedPair {
     my ($pair, $byRegion) = @_;
@@ -104,21 +127,40 @@ sub emitFusedPair {
 }
 
 sub consensusForRegion {
-    my ($region) = @_;
-    my $cmd = sprintf(
-        "samtools view -b -N %s %s %s | "
-      . "samtools mpileup -aa -A -B -Q 0 -f %s -r %s -",
-        shellQuote($readsFile), shellQuote($bamFile), shellQuote($region),
-        shellQuote($refFile),   shellQuote($region),
-    );
-    $verbose and print STDERR "# $cmd\n";
+    my ($region, $pileupFh) = @_;
 
-    open(my $fp, "-|", $cmd) or die "can't run pileup pipeline: $!";
+    # mpileup -r requires an indexed BAM, so we materialize a per-region
+    # filtered BAM under $tmpDir rather than piping samtools view in.
+    $tmpCounter++;
+    my $regionBam = "$tmpDir/region$tmpCounter.bam";
+    my $filterCmd = sprintf(
+        "samtools view -b -N %s -o %s %s %s",
+        shellQuote($readsFile), shellQuote($regionBam),
+        shellQuote($bamFile),   shellQuote($region),
+    );
+    $verbose and print STDERR "# $filterCmd\n";
+    runOrDie($filterCmd);
+    runOrDie("samtools index " . shellQuote($regionBam));
+
+    my $pileCmd = sprintf(
+        "samtools mpileup -aa -A -B -Q 0 -f %s -r %s %s",
+        shellQuote($refFile), shellQuote($region), shellQuote($regionBam),
+    );
+    $verbose and print STDERR "# $pileCmd\n";
+
+    open(my $fp, "-|", $pileCmd) or die "can't run mpileup: $!";
     my $seq = "";
     while (my $line = <$fp>) {
         chomp $line;
         my ($chr, $pos, $ref, $depth, $bases) = split(/\t/, $line);
-        $seq .= consensusBase($ref, $depth // 0, $bases // "");
+        my ($call, $counts) = consensusBase($ref, $depth // 0, $bases // "");
+        $seq .= $call;
+        if ($pileupFh) {
+            print $pileupFh join("\t",
+                $chr, $pos, uc($ref // 'N'), $call, $depth // 0,
+                $counts->{A}, $counts->{C}, $counts->{G}, $counts->{T},
+            ), "\n";
+        }
     }
     close($fp);
     return $seq;
@@ -132,26 +174,48 @@ sub readBreakpointPairs {
         next if substr($line, 0, 1) eq '#';
         chomp $line;
         next if $line =~ /^\s*$/;
+        my @halves = split /;/, $line;
         my @sides;
-        foreach my $half (split /;/, $line) {
-            my ($chr, $start, $end) = split /:/, $half;
+        for (my $i = 0; $i < @halves; $i++) {
+            my $half = $halves[$i];
+            my ($chr, $a, $b) = split /:/, $half;
             next unless defined $chr && length($chr);
-            unless (defined $start && length($start)
-                 && defined $end   && length($end)) {
+            unless (defined $a && length($a)
+                 && defined $b && length($b)) {
                 warn "skipping '$half' on '$line': pileup needs chr:start:end\n";
                 next;
             }
-            my $dir = '+';
-            if ($start > $end) {
-                $dir = '-';
-                ($start, $end) = ($end, $start);
-            }
-            push @sides, { region => "$chr:$start-$end", dir => $dir };
+            my $dir = ($a > $b) ? '-' : '+';
+            my $bp  = ($i == 0) ? $b : $a;
+            push @sides, { chr => $chr, bp => 0 + $bp, dir => $dir, idx => $i };
         }
         push @pairs, \@sides if @sides;
     }
     close($fp);
     return @pairs;
+}
+
+# Genomic window for one side of a fusion pair.
+# 5' partner (idx 0) wants the W bases ending at bp in transcript order.
+# 3' partner (idx 1) wants the W bases starting at bp in transcript order.
+# Combined with strand: + transcript flows up genomically, - transcript
+# flows down. The two true cases below pick "going up" vs "going down".
+sub windowForSide {
+    my ($side) = @_;
+    my $bp  = $side->{bp};
+    my $dir = $side->{dir};
+    my $idx = $side->{idx};
+    my ($lo, $hi);
+    if (($idx == 0 && $dir eq '+') || ($idx == 1 && $dir eq '-')) {
+        $lo = $bp - $window + 1;
+        $hi = $bp;
+    }
+    else {
+        $lo = $bp;
+        $hi = $bp + $window - 1;
+    }
+    $lo = 1 if $lo < 1;
+    return "$side->{chr}:$lo-$hi";
 }
 
 sub parseRegion {
@@ -234,7 +298,10 @@ sub revcomp {
     return scalar reverse $s;
 }
 
-# Walks an mpileup bases string, returning the consensus base for the column.
+# Returns ($base, \%counts). $base is uppercase when it equals the reference
+# (or no variant call could be made), lowercase when a non-reference base won
+# >threshold of the parsed reads. %counts is A/C/G/T tallies for the column.
+#
 # mpileup encoding: '.'/',' = match to ref; ACGTN (any case) = mismatch;
 # '^X' starts a read (X is mapq, skip it); '$' ends a read; '+N<seq>' /
 # '-N<seq>' are insertions/deletions to the reference following this column;
@@ -242,10 +309,27 @@ sub revcomp {
 sub consensusBase {
     my ($ref, $depth, $bases) = @_;
     $ref = uc($ref // 'N');
-    return $ref if !$depth || $depth < $minDepth;
-    return $ref if !length($bases) || $bases eq '*';
 
-    my %count;
+    my %count = (A => 0, C => 0, G => 0, T => 0, N => 0);
+    parseBases($bases, $ref, \%count) if length($bases);
+
+    if (!$depth || $depth < $minDepth || !length($bases) || $bases eq '*') {
+        return ($ref, \%count);
+    }
+
+    my $total = $count{A} + $count{C} + $count{G} + $count{T} + $count{N};
+    return ($ref, \%count) if $total == 0;
+
+    foreach my $b (qw(A C G T)) {
+        next if $b eq $ref;
+        return (lc($b), \%count) if $count{$b} / $total > $threshold;
+    }
+    return ($ref, \%count);
+}
+
+sub parseBases {
+    my ($bases, $ref, $count) = @_;
+    return if $bases eq '*';
     my @c = split(//, $bases);
     my $i = 0;
     while ($i <= $#c) {
@@ -260,24 +344,19 @@ sub consensusBase {
             next;
         }
         if ($ch eq '*' || $ch eq '#') { $i++; next; }
-        if ($ch eq '.' || $ch eq ',') { $count{$ref}++; $i++; next; }
-        $count{uc($ch)}++;
+        if ($ch eq '.' || $ch eq ',') { $count->{$ref}++; $i++; next; }
+        $count->{uc($ch)}++;
         $i++;
     }
-
-    my $total = 0;
-    foreach my $b (qw(A C G T N)) { $total += $count{$b} if $count{$b}; }
-    return $ref if $total == 0;
-
-    foreach my $b (qw(A C G T)) {
-        next if $b eq $ref;
-        return $b if defined $count{$b} && $count{$b} / $total > $threshold;
-    }
-    return $ref;
 }
 
 sub shellQuote {
     my ($s) = @_;
     $s =~ s/'/'\\''/g;
     return "'$s'";
+}
+
+sub runOrDie {
+    my ($cmd) = @_;
+    system($cmd) == 0 or die "command failed (exit $?): $cmd\n";
 }

@@ -3161,3 +3161,1050 @@ no changes added to commit (use "git add" and/or "git commit -a")
 7df79ee first commit
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:09Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:10Z)**_
+
+No, I didn't — I asked if you wanted me to and waited. Doing it now.
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:16Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Stage and commit all the wiring + README changes
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add README.md breakpointPileup.pl widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Wire breakpointPileup.pl into BFF Docker image and add top-level README
+
+- Top-level breakpointPileup.pl is now a symlink to bin/breakpointPileup.pl
+  so the canonical script lives in one place.
+- BFF Dockerfile ADDs a copy of breakpointPileup.pl into /usr/local/bin.
+- runBFF.sh, after running filterEnds.pl, requires $BAM and $REFERENCE
+  (errors out if unset), recovers the breakpoint file from the args, and
+  calls breakpointPileup.pl, writing to $pileup or ${filterends}.fa.
+- README documents inputs, requirements, an end-to-end run, and a smoke
+  test that exercises the plumbing without real fusion-supporting reads.
+EOF
+)"
+```
+
+```text
+[master 6155683] Wire breakpointPileup.pl into BFF Docker image and add top-level README
+ 8 files changed, 1057 insertions(+), 5 deletions(-)
+ create mode 100644 README.md
+ create mode 120000 breakpointPileup.pl
+ create mode 100755 widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:20Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Push to origin master
+
+`git -C /home/lhhung/fast_fusion_finder push 2>&1`
+
+```text
+To github.com:lhhunghimself/fast_fusion_finder.git
+   82f0a79..6155683  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:26Z)**_
+
+Committed as `6155683` (8 files, +1057/-5) and pushed to `origin/master`. The symlink went in as a real symlink (`create mode 120000`), not as a duplicate file.
+
+I left `.vscode/` out of the commit since it looked editor-specific. If you'd like it tracked, say the word and I'll do a follow-up.
+
+---
+
+_**User (2026-04-29 20:07:19Z)**_
+
+OK - lets change runBFF.sh a bit. If the reference or bam environment variables are empty - just run the usual fusionfinder. If they are both provided then run the pileup and generate the sequence. About the sequence - how do you know how long to generate it -> is that a parameter or is that dependent on coverage?
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:07:47Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:07:52Z)**_
+
+The sequence length is determined entirely by the breakpoint file's coordinates — it isn't a parameter and doesn't depend on coverage.
+
+When we run `samtools mpileup -aa -r chr:start-end`, the `-aa` flag forces one output row per position in the region, even at zero coverage. The script then emits exactly one base per row (ref by default, alt if a non-ref base wins >50% of the reads at that column). So:
+
+- **Length per side** = `end - start + 1` from the breakpoint file.
+- **Coverage** decides *what* base goes at each position (low/no coverage → reference base), not *how many* positions.
+
+So if your breakpoint file says `chr15:74318559:74336132`, you'll always get 17,574 bases for that side, regardless of whether 1 read or 1,000 cover it. If you want the output trimmed to "actually-covered" regions or to a fixed window around the splice point, that's a separate change.
+
+Now the runBFF.sh tweak:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:08:01Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:08:04Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Syntax-check runBFF.sh
+
+`bash -n /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh && echo "shell syntax OK"`
+
+```text
+shell syntax OK
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:08:12Z)**_
+
+Updated [runBFF.sh](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh): the pileup step now runs only when **both** `$BAM` and `$REFERENCE` are non-empty. If either is missing, `filterEnds.pl` runs as before and the script logs `"BAM and/or REFERENCE not set; skipping breakpointPileup.pl"` to stdout. The `filterSam.pl` (no `$filterends`) path is untouched.
+
+Two follow-ups worth flagging since they touch the same area:
+
+- **Length question, restated as a feature.** Right now you can keep the breakpoint range tight (small `start:end`) to control output length, or wide if you want to see flanking sequence. If you want a `--window N` flag that re-anchors each side to *N* bases on either side of the actual breakpoint position (lowest/highest coord per side), that's a small addition to `breakpointPileup.pl` — let me know.
+- I left `bp_file` validation as `:?` (errors out) inside the pileup branch only. If you'd prefer it to also degrade gracefully (skip pileup if `-b` is missing from the args, even with `$BAM`/`$REFERENCE` set), I can swap it.
+
+Want me to commit and push?
+
+---
+
+_**User (2026-04-29 20:10:43Z)**_
+
+Not yet - I want it to be much smaller than what you have - a window size would be good - make that a env variable as well - for default make it 100 bp on either side. Also the sequence should show variants - perhaps have a pileup as a separate document and the bottom consensus with lower case for changes from the reference
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:14:35Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:14:39Z)**_
+
+Got it. Three things to add:
+
+- **Window**: env var `$WINDOW`, default 100. Each side gets `[bp-W+1, bp]` or `[bp, bp+W-1]` in genomic coords depending on side index (5'/3') and strand. `bp` per side = the second coord of side 1 and first coord of side 2 in the breakpoint file (matches what `findBreakPoints` writes).
+- **Lowercase variants**: when consensus ≠ ref, emit lowercase. Reverse-complement preserves case.
+- **Separate pileup table**: optional `--pileupOut` argument (env var `$pileupTable` in runBFF.sh) writing a TSV with per-position counts.
+
+Let me update [bin/breakpointPileup.pl](bin/breakpointPileup.pl):
+
+_**Agent (claude-opus-4-7 2026-04-29 20:15:31Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```pl
+#!/usr/bin/perl
+
+# breakpointPileup.pl
+#
+# Companion to filterEnds.pl. filterEnds.pl prints a list of read names whose
+# split alignments support a fusion breakpoint; this script takes that list
+# and emits the fusion mRNA sequence — windowed around the breakpoint — one
+# record per breakpoint line.
+#
+# Per side, the breakpoint position comes from the breakpoint file itself:
+# the second coord of side 1 (5' partner) and the first coord of side 2
+# (3' partner), matching the convention findBreakPoints uses to write them.
+# Each side is then piled up over a window of --window bases on the
+# transcript-internal flank of the breakpoint:
+#   5' partner: the W bases ending at the breakpoint in transcript order
+#   3' partner: the W bases starting at the breakpoint in transcript order
+# so the concatenated record is a 2*W-base window centered on the junction.
+#
+# At each pileup column the reference base is used by default; if a single
+# non-reference base is seen in more than --threshold fraction of the parsed
+# read bases at that column, that base is used instead and emitted in lower
+# case. Reverse-complementing for - strand sides preserves case.
+#
+# Strand per side comes from the start:end coord order in the breakpoint
+# file: start<end is +, start>end is - (the upstream majority-rule generator
+# only emits correctly stranded matches). --guideFile overrides that.
+#
+# --pileupOut writes a per-position TSV (chr, pos, ref, consensus, depth,
+# A, C, G, T) for every pileup column visited. Genomic order, one row per
+# column. The "consensus" column matches what goes into the FASTA, so
+# uppercase = ref, lowercase = called variant.
+#
+# Usage:
+#   breakpointPileup.pl --reads reads.txt --bam in.bam --ref ref.fa \
+#                       --breakpointFile breakpoints.txt \
+#                       [--window 100] [--pileupOut variants.tsv] \
+#                       [--guideFile guides.txt] \
+#                       [--threshold 0.5] [--minDepth 1] [--verbose]
+#
+# The BAM must be coordinate-sorted and indexed, and the FASTA must have a
+# matching .fai. The breakpoint file uses the same format as filterEnds.pl:
+#   chr15:74318559:74336132;chr17:38428464:38512385
+# Lines starting with '#' are ignored.
+
+use warnings;
+use strict;
+use Getopt::Long;
+
+my $readsFile;
+my $bamFile;
+my $refFile;
+my $breakpointFile;
+my $guideFile;
+my $pileupOut;
+my $threshold = 0.5;
+my $minDepth  = 1;
+my $window    = 100;
+my $verbose   = 0;
+
+GetOptions(
+    "reads=s"            => \$readsFile,
+    "bam=s"              => \$bamFile,
+    "ref=s"              => \$refFile,
+    "breakpointFile|b=s" => \$breakpointFile,
+    "guideFile|G=s"      => \$guideFile,
+    "pileupOut=s"        => \$pileupOut,
+    "threshold|t=f"      => \$threshold,
+    "minDepth|d=i"       => \$minDepth,
+    "window|w=i"         => \$window,
+    "verbose|v"          => \$verbose,
+) or die "Error in command line arguments\n";
+
+defined $readsFile      or die "--reads is required\n";
+defined $bamFile        or die "--bam is required\n";
+defined $refFile        or die "--ref is required\n";
+defined $breakpointFile or die "--breakpointFile is required\n";
+$window > 0             or die "--window must be positive\n";
+
+my $pileupFh;
+if (defined $pileupOut) {
+    open($pileupFh, '>', $pileupOut) or die "can't write $pileupOut: $!\n";
+    print $pileupFh "#chr\tpos\tref\tconsensus\tdepth\tA\tC\tG\tT\n";
+}
+
+my @pairs = readBreakpointPairs($breakpointFile);
+@pairs or die "no usable breakpoint lines in $breakpointFile\n";
+
+my %byRegion;
+foreach my $pair (@pairs) {
+    foreach my $side (@$pair) {
+        $side->{region} = windowForSide($side);
+        my $region = $side->{region};
+        next if exists $byRegion{$region};
+        my ($chr, $start, $end) = parseRegion($region);
+        my $seq = consensusForRegion($region, $pileupFh);
+        $byRegion{$region} = { chr => $chr, start => $start, end => $end, seq => $seq };
+    }
+}
+
+if (defined $guideFile) {
+    emitFusedGroups($guideFile, \%byRegion);
+}
+else {
+    foreach my $pair (@pairs) {
+        emitFusedPair($pair, \%byRegion);
+    }
+}
+
+close($pileupFh) if $pileupFh;
+
+sub emitFusedPair {
+    my ($pair, $byRegion) = @_;
+    my @parts;
+    my @anno;
+    foreach my $side (@$pair) {
+        my $info = $byRegion->{ $side->{region} };
+        my $seq  = $info->{seq};
+        $seq = revcomp($seq) if $side->{dir} eq '-';
+        push @parts, $seq;
+        push @anno, "$side->{region}$side->{dir}";
+    }
+    emitFasta(join(';', @anno), join('', @parts));
+}
+
+sub consensusForRegion {
+    my ($region, $pileupFh) = @_;
+    my $cmd = sprintf(
+        "samtools view -b -N %s %s %s | "
+      . "samtools mpileup -aa -A -B -Q 0 -f %s -r %s -",
+        shellQuote($readsFile), shellQuote($bamFile), shellQuote($region),
+        shellQuote($refFile),   shellQuote($region),
+    );
+    $verbose and print STDERR "# $cmd\n";
+
+    open(my $fp, "-|", $cmd) or die "can't run pileup pipeline: $!";
+    my $seq = "";
+    while (my $line = <$fp>) {
+        chomp $line;
+        my ($chr, $pos, $ref, $depth, $bases) = split(/\t/, $line);
+        my ($call, $counts) = consensusBase($ref, $depth // 0, $bases // "");
+        $seq .= $call;
+        if ($pileupFh) {
+            print $pileupFh join("\t",
+                $chr, $pos, uc($ref // 'N'), $call, $depth // 0,
+                $counts->{A}, $counts->{C}, $counts->{G}, $counts->{T},
+            ), "\n";
+        }
+    }
+    close($fp);
+    return $seq;
+}
+
+sub readBreakpointPairs {
+    my ($file) = @_;
+    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+    my @pairs;
+    while (my $line = <$fp>) {
+        next if substr($line, 0, 1) eq '#';
+        chomp $line;
+        next if $line =~ /^\s*$/;
+        my @halves = split /;/, $line;
+        my @sides;
+        for (my $i = 0; $i < @halves; $i++) {
+            my $half = $halves[$i];
+            my ($chr, $a, $b) = split /:/, $half;
+            next unless defined $chr && length($chr);
+            unless (defined $a && length($a)
+                 && defined $b && length($b)) {
+                warn "skipping '$half' on '$line': pileup needs chr:start:end\n";
+                next;
+            }
+            my $dir = ($a > $b) ? '-' : '+';
+            my $bp  = ($i == 0) ? $b : $a;
+            push @sides, { chr => $chr, bp => 0 + $bp, dir => $dir, idx => $i };
+        }
+        push @pairs, \@sides if @sides;
+    }
+    close($fp);
+    return @pairs;
+}
+
+# Genomic window for one side of a fusion pair.
+# 5' partner (idx 0) wants the W bases ending at bp in transcript order.
+# 3' partner (idx 1) wants the W bases starting at bp in transcript order.
+# Combined with strand: + transcript flows up genomically, - transcript
+# flows down. The two true cases below pick "going up" vs "going down".
+sub windowForSide {
+    my ($side) = @_;
+    my $bp  = $side->{bp};
+    my $dir = $side->{dir};
+    my $idx = $side->{idx};
+    my ($lo, $hi);
+    if (($idx == 0 && $dir eq '+') || ($idx == 1 && $dir eq '-')) {
+        $lo = $bp - $window + 1;
+        $hi = $bp;
+    }
+    else {
+        $lo = $bp;
+        $hi = $bp + $window - 1;
+    }
+    $lo = 1 if $lo < 1;
+    return "$side->{chr}:$lo-$hi";
+}
+
+sub parseRegion {
+    my ($r) = @_;
+    $r =~ /^([^:]+):(\d+)-(\d+)$/ or die "bad region '$r'\n";
+    return ($1, $2, $3);
+}
+
+sub emitFusedGroups {
+    my ($file, $byRegion) = @_;
+    open(my $fp, '<', $file) or die "can't open $file: $!\n";
+    my %groups;
+    my @order;
+    while (my $line = <$fp>) {
+        next if substr($line, 0, 1) eq '#';
+        chomp $line;
+        next if $line =~ /^\s*$/;
+        my ($group, $loc, $dir) = split /\t/, $line;
+        unless (defined $group && defined $loc && defined $dir) {
+            warn "skipping malformed guide line: $line\n";
+            next;
+        }
+        $dir =~ s/\s+//g;
+        unless ($dir eq '+' || $dir eq '-') {
+            warn "skipping guide '$group' $loc: direction must be + or -\n";
+            next;
+        }
+        my ($chr, $pos) = split /:/, $loc;
+        unless (defined $chr && defined $pos && $pos =~ /^\d+$/) {
+            warn "skipping guide '$group' $loc: expected chr:pos\n";
+            next;
+        }
+        push @order, $group unless exists $groups{$group};
+        push @{ $groups{$group} }, { chr => $chr, pos => $pos, dir => $dir };
+    }
+    close($fp);
+
+    foreach my $group (@order) {
+        my @parts;
+        my @anno;
+        foreach my $g (@{ $groups{$group} }) {
+            my $info = matchRegion($g->{chr}, $g->{pos}, $byRegion);
+            unless ($info) {
+                warn "no breakpoint region matches guide '$group' $g->{chr}:$g->{pos}\n";
+                next;
+            }
+            my $part = $info->{seq};
+            $part = revcomp($part) if $g->{dir} eq '-';
+            push @parts, $part;
+            push @anno, "$g->{chr}:$info->{start}-$info->{end}$g->{dir}";
+        }
+        next unless @parts;
+        emitFasta("$group " . join(';', @anno), join('', @parts));
+    }
+}
+
+sub matchRegion {
+    my ($chr, $pos, $byRegion) = @_;
+    my $chrFallback;
+    foreach my $r (keys %$byRegion) {
+        my $info = $byRegion->{$r};
+        next unless $info->{chr} eq $chr;
+        $chrFallback ||= $info;
+        return $info if $pos >= $info->{start} && $pos <= $info->{end};
+    }
+    return $chrFallback;
+}
+
+sub emitFasta {
+    my ($header, $seq) = @_;
+    print ">$header length=", length($seq), "\n";
+    for (my $i = 0; $i < length($seq); $i += 80) {
+        print substr($seq, $i, 80), "\n";
+    }
+}
+
+sub revcomp {
+    my ($s) = @_;
+    $s =~ tr/ACGTNacgtn/TGCANtgcan/;
+    return scalar reverse $s;
+}
+
+# Returns ($base, \%counts). $base is uppercase when it equals the reference
+# (or no variant call could be made), lowercase when a non-reference base won
+# >threshold of the parsed reads. %counts is A/C/G/T tallies for the column.
+#
+# mpileup encoding: '.'/',' = match to ref; ACGTN (any case) = mismatch;
+# '^X' starts a read (X is mapq, skip it); '$' ends a read; '+N<seq>' /
+# '-N<seq>' are insertions/deletions to the reference following this column;
+# '*'/'#' is a deletion that covers this column.
+sub consensusBase {
+    my ($ref, $depth, $bases) = @_;
+    $ref = uc($ref // 'N');
+
+    my %count = (A => 0, C => 0, G => 0, T => 0, N => 0);
+    parseBases($bases, $ref, \%count) if length($bases);
+
+    if (!$depth || $depth < $minDepth || !length($bases) || $bases eq '*') {
+        return ($ref, \%count);
+    }
+
+    my $total = $count{A} + $count{C} + $count{G} + $count{T} + $count{N};
+    return ($ref, \%count) if $total == 0;
+
+    foreach my $b (qw(A C G T)) {
+        next if $b eq $ref;
+        return (lc($b), \%count) if $count{$b} / $total > $threshold;
+    }
+    return ($ref, \%count);
+}
+
+sub parseBases {
+    my ($bases, $ref, $count) = @_;
+    return if $bases eq '*';
+    my @c = split(//, $bases);
+    my $i = 0;
+    while ($i <= $#c) {
+        my $ch = $c[$i];
+        if ($ch eq '^') { $i += 2; next; }
+        if ($ch eq '$') { $i += 1; next; }
+        if ($ch eq '+' || $ch eq '-') {
+            $i++;
+            my $n = "";
+            while ($i <= $#c && $c[$i] =~ /\d/) { $n .= $c[$i]; $i++; }
+            $i += int($n);
+            next;
+        }
+        if ($ch eq '*' || $ch eq '#') { $i++; next; }
+        if ($ch eq '.' || $ch eq ',') { $count->{$ref}++; $i++; next; }
+        $count->{uc($ch)}++;
+        $i++;
+    }
+}
+
+sub shellQuote {
+    my ($s) = @_;
+    $s =~ s/'/'\\''/g;
+    return "'$s'";
+}
+
+```
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:15:36Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify and sync Dockerfiles copy
+
+`perl -c /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl && cp /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl && perl -c /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl`
+
+```text
+/home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl syntax OK
+/home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl syntax OK
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:15:39Z)**_
+
+Now wire `$WINDOW` and `$pileupTable` env vars into runBFF.sh:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:15:44Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:15:48Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify final runBFF.sh
+
+`bash -n /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh && echo "shell OK" && cat /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh`
+
+```text
+shell OK
+#!/bin/bash
+shopt -s extglob
+inputArgs=("$@")
+printenv
+if [ -n "$filterends" ]; then
+  echo " filterEnds.pl  ${inputArgs[@]} > $filterends"
+  eval " filterEnds.pl  ${inputArgs[@]} > $filterends"
+
+  if [ -n "$BAM" ] && [ -n "$REFERENCE" ]; then
+    bp_file=""
+    for ((i=0; i<${#inputArgs[@]}; i++)); do
+      case "${inputArgs[i]}" in
+        -b|--breakpointFile)        bp_file="${inputArgs[i+1]}";;
+        --breakpointFile=*)         bp_file="${inputArgs[i]#--breakpointFile=}";;
+        -b=*)                       bp_file="${inputArgs[i]#-b=}";;
+      esac
+    done
+    : "${bp_file:?could not find -b/--breakpointFile in args for breakpointPileup.pl}"
+
+    pileup_out="${pileup:-${filterends}.fa}"
+    extra_args=()
+    [ -n "$WINDOW" ]       && extra_args+=(--window "$WINDOW")
+    [ -n "$pileupTable" ]  && extra_args+=(--pileupOut "$pileupTable")
+    echo "breakpointPileup.pl --reads $filterends --bam $BAM --ref $REFERENCE -b $bp_file ${extra_args[@]} > $pileup_out"
+    breakpointPileup.pl --reads "$filterends" --bam "$BAM" --ref "$REFERENCE" -b "$bp_file" "${extra_args[@]}" > "$pileup_out"
+  else
+    echo "BAM and/or REFERENCE not set; skipping breakpointPileup.pl"
+  fi
+else
+  echo "/data/debug/filterSam.pl ${inputArgs[@]}"
+  eval "/data/debug/filterSam.pl ${inputArgs[@]}"
+fi
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:16:07Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:16:19Z)**_
+
+Changes in place across [bin/breakpointPileup.pl](bin/breakpointPileup.pl), the Dockerfiles copy, and [runBFF.sh](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh):
+
+**Windowing.** Per side, the breakpoint position is read directly from the breakpoint file (`end` of side 1, `start` of side 2 — what `findBreakPoints` writes). The pileup window then depends on which partner the side is and which strand it's on:
+
+| side | dir | genomic window     | RC after pileup |
+|------|-----|--------------------|-----------------|
+| 5'   | +   | `[bp-W+1, bp]`     | no              |
+| 5'   | -   | `[bp, bp+W-1]`     | yes             |
+| 3'   | +   | `[bp, bp+W-1]`     | no              |
+| 3'   | -   | `[bp-W+1, bp]`     | yes             |
+
+So a single fusion record is `2*W` bases (default 200) centered on the junction in transcript order.
+
+**Lowercase variants.** When a non-reference base wins >50% of the column, the script emits the alt in lowercase; otherwise the ref base in uppercase. Reverse-complementation preserves case (`tr/ACGTNacgtn/TGCANtgcan/`), so a `g` on the + strand becomes a `c` on the - strand.
+
+**Per-position TSV.** New `--pileupOut path` writes a header line plus one row per pileup column:
+
+```
+#chr	pos	ref	consensus	depth	A	C	G	T
+chr15	74336131	A	A	7	7	0	0	0
+chr15	74336132	G	a	8	8	0	0	0
+```
+
+Always in genomic order (per side), so it's reverse of transcript order for `-` sides — the FASTA gets RC'd, the table doesn't.
+
+**Env-var wiring.** `runBFF.sh` now passes `--window "$WINDOW"` only if `$WINDOW` is set, and `--pileupOut "$pileupTable"` only if `$pileupTable` is set. Defaults (window 100, no TSV) live in the Perl script.
+
+To test:
+
+```bash
+WINDOW=100 \
+pileupTable=/tmp/variants.tsv \
+pileup=/tmp/fusion.fa \
+filterends=/tmp/reads.txt \
+BAM=all.sorted.bam REFERENCE=ref.fa \
+runBFF.sh --first first.bam --last last.bam -b breakpoints.txt
+```
+
+Want me to commit and push, or hold off until you've tried it on real data?
+
+---
+
+_**User (2026-04-29 20:17:23Z)**_
+
+Can you unit test the script for me with a small fake reference and bam file
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:19:21Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:19:23Z)**_
+
+Will do — I'll write a small fixture-based test. The test builds a synthetic reference, BAM, breakpoint file and reads list, runs the script, and asserts the FASTA + TSV match expected output. Putting it under `tests/` so it's easy to re-run.
+
+_**Agent (claude-opus-4-7 2026-04-29 20:19:24Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Create tests directory
+
+`mkdir -p /home/lhhung/fast_fusion_finder/tests && ls /home/lhhung/fast_fusion_finder/`
+
+```text
+bin
+breakpointPileup.pl
+fast_fusion_finder.ows
+guidesToBreakpoints.pl
+README.md
+tests
+widgets
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:20:06Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```sh
+#!/usr/bin/env bash
+# Self-contained smoke test for bin/breakpointPileup.pl.
+#
+# Builds a tiny synthetic reference + BAM and exercises:
+#   1. forward+forward pair with no variants
+#   2. forward+forward pair with a majority-rule variant on side 1
+#   3. forward+reverse pair, with a majority-rule variant on the reverse side
+#      (so we can verify RC preserves variant lowercase and ends up in the
+#       right transcript-order position)
+#   4. tightening --window further than the breakpoint range and checking the
+#      output anchors on the breakpoint position, not the range bounds
+#   5. that --pileupOut emits a per-position TSV with correct counts
+#
+# Run with `bash tests/test_breakpointPileup.sh` from the repo root.
+# Requires samtools 1.12+ on PATH.
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+PILEUP="$REPO_ROOT/bin/breakpointPileup.pl"
+
+if [[ ! -x "$PILEUP" ]]; then
+    echo "FAIL: $PILEUP is not executable" >&2
+    exit 1
+fi
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+cd "$WORK"
+
+# ---- helpers -----------------------------------------------------------------
+
+repeat() { # repeat CHAR N
+    local ch="$1" n="$2"
+    head -c "$n" </dev/zero | tr '\0' "$ch"
+}
+
+assert_eq() { # assert_eq LABEL EXPECTED ACTUAL
+    local label="$1" expected="$2" actual="$3"
+    if [[ "$expected" == "$actual" ]]; then
+        printf 'PASS  %s\n' "$label"
+    else
+        printf 'FAIL  %s\n  expected: %s\n  got:      %s\n' "$label" "$expected" "$actual"
+        exit 1
+    fi
+}
+
+fasta_seq() { # fasta_seq PATH HEADER_NUM(1-based)  -> seq with no newlines
+    awk -v want="$2" 'BEGIN{n=0} /^>/{n++; next} n==want{printf "%s", $0}' "$1"
+}
+
+# ---- fixtures ----------------------------------------------------------------
+
+# chr1 = 200 A, chr2 = 200 G. Picking different bases per chromosome makes RC
+# unambiguous (RC of all-G is all-C, distinguishable from chr1's A).
+{
+    printf '>chr1\n%s\n' "$(repeat A 200)"
+    printf '>chr2\n%s\n' "$(repeat G 200)"
+} >ref.fa
+samtools faidx ref.fa
+
+QUAL50=$(repeat I 50)
+A50=$(repeat A 50)
+A49=$(repeat A 49)
+G50=$(repeat G 50)
+G49=$(repeat G 49)
+
+emit_sam() {
+    printf '@HD\tVN:1.6\tSO:unsorted\n'
+    printf '@SQ\tSN:chr1\tLN:200\n'
+    printf '@SQ\tSN:chr2\tLN:200\n'
+
+    # 10 reads on chr1 covering 101-150. 8 carry a T at position 150 (last
+    # base), 2 carry the reference A.
+    for i in 1 2 3 4 5 6 7 8; do
+        printf 'chr1var%d\t0\tchr1\t101\t60\t50M\t*\t0\t0\t%sT\t%s\n' "$i" "$A49" "$QUAL50"
+    done
+    for i in 9 10; do
+        printf 'chr1ref%d\t0\tchr1\t101\t60\t50M\t*\t0\t0\t%s\t%s\n' "$i" "$A50" "$QUAL50"
+    done
+
+    # 10 reads on chr2 covering 50-99 with no variants.
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        printf 'chr2plus%d\t0\tchr2\t50\t60\t50M\t*\t0\t0\t%s\t%s\n' "$i" "$G50" "$QUAL50"
+    done
+
+    # 10 reads on chr2 covering 100-149. 8 carry a T at position 100 (first
+    # base), 2 carry the reference G. Used by the forward+reverse test.
+    for i in 1 2 3 4 5 6 7 8; do
+        printf 'chr2var%d\t0\tchr2\t100\t60\t50M\t*\t0\t0\tT%s\t%s\n' "$i" "$G49" "$QUAL50"
+    done
+    for i in 9 10; do
+        printf 'chr2ref%d\t0\tchr2\t100\t60\t50M\t*\t0\t0\t%s\t%s\n' "$i" "$G50" "$QUAL50"
+    done
+}
+
+emit_sam >reads.sam
+samtools sort -O bam reads.sam -o reads.bam
+samtools index reads.bam
+
+# Reads list — every synthetic read participates.
+{
+    for i in 1 2 3 4 5 6 7 8;  do echo "chr1var$i";   done
+    for i in 9 10;             do echo "chr1ref$i";   done
+    for i in 1 2 3 4 5 6 7 8 9 10; do echo "chr2plus$i"; done
+    for i in 1 2 3 4 5 6 7 8;  do echo "chr2var$i";   done
+    for i in 9 10;             do echo "chr2ref$i";   done
+} >reads.txt
+
+# ---- test 1: forward+forward, variant on side 1 ------------------------------
+
+echo "chr1:51:150;chr2:50:149" >bp1.txt
+"$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
+          --window 50 --pileupOut t1.tsv >t1.fa
+
+EXP1="$(repeat A 49)t$G50"   # 49 As + lowercase t (8/10 -> alt) + 50 Gs
+GOT1=$(fasta_seq t1.fa 1)
+assert_eq "test1 fwd+fwd seq with side-1 variant" "$EXP1" "$GOT1"
+
+# TSV at chr1:150 should show consensus 't' with A=2, T=8.
+ROW=$(awk '$1=="chr1" && $2==150' t1.tsv)
+assert_eq "test1 TSV chr1:150" "chr1	150	A	t	10	2	0	0	8" "$ROW"
+
+# Sanity: a non-variant column.
+ROW=$(awk '$1=="chr2" && $2==50' t1.tsv)
+assert_eq "test1 TSV chr2:50 (no variant)" "chr2	50	G	G	10	0	0	10	0" "$ROW"
+
+# ---- test 2: tighter --window anchors on the breakpoint, not the range -------
+
+# Same breakpoint file, --window 5 -> sides should be chr1:146-150 + chr2:50-54.
+"$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
+          --window 5 >t2.fa
+
+EXP2="AAAAt$(repeat G 5)"     # 4 As + t + 5 Gs
+GOT2=$(fasta_seq t2.fa 1)
+assert_eq "test2 narrow window anchors on breakpoint" "$EXP2" "$GOT2"
+
+# ---- test 3: forward+reverse, variant on the reverse side --------------------
+
+# Reverse side 2 by encoding it start>end. Side 2 breakpoint = start = 149,
+# pileup window [100, 149], reads have 8/10 T at chr2:100. After RC the
+# variant should appear at the *last* position of the fusion (RC moves
+# position 100 to the tail and complements T -> a).
+echo "chr1:51:150;chr2:149:100" >bp3.txt
+"$PILEUP" --reads reads.txt --bam reads.bam --ref ref.fa -b bp3.txt \
+          --window 50 --pileupOut t3.tsv >t3.fa
+
+EXP3="${A49}t$(repeat C 49)a"   # side-1 variant t + 49 Cs (RC of 49 Gs) + lowercase a
+GOT3=$(fasta_seq t3.fa 1)
+assert_eq "test3 fwd+rev seq with both-side variants and RC" "$EXP3" "$GOT3"
+
+# Pileup TSV stays in genomic order, so chr2:100 row should record 't' alt.
+ROW=$(awk '$1=="chr2" && $2==100' t3.tsv)
+assert_eq "test3 TSV chr2:100 (variant on rev side, genomic order)" \
+          "chr2	100	G	t	10	2	0	0	8" "$ROW"
+
+# FASTA header should reflect resolved direction per side.
+HEADER=$(awk '/^>/{print; exit}' t3.fa)
+[[ "$HEADER" == *"chr1:101-150+"* && "$HEADER" == *"chr2:100-149-"* ]] \
+    || { echo "FAIL  test3 header: $HEADER"; exit 1; }
+echo "PASS  test3 FASTA header records side strands"
+
+# ---- test 4: zero-coverage falls back to reference ---------------------------
+
+# Empty reads list -> every column has depth 0 -> output should be the plain
+# reference (no lowercase, no RC effect on case).
+:>empty_reads.txt
+"$PILEUP" --reads empty_reads.txt --bam reads.bam --ref ref.fa -b bp1.txt \
+          --window 10 >t4.fa
+EXP4="$(repeat A 10)$(repeat G 10)"
+GOT4=$(fasta_seq t4.fa 1)
+assert_eq "test4 zero-coverage falls back to ref" "$EXP4" "$GOT4"
+
+echo
+echo "all tests passed"
+
+```
+
+```text
+File created successfully at: /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:20:11Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Run the test script
+
+`chmod +x /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh && bash /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh 2>&1`
+
+```text
+Exit code 1
+[E::idx_find_and_load] Could not retrieve index file for '-'
+[mpileup] fail to load index for -
+[E::idx_find_and_load] Could not retrieve index file for '-'
+[mpileup] fail to load index for -
+FAIL  test1 fwd+fwd seq with side-1 variant
+  expected: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAtGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG
+  got:
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:28Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:29Z)**_
+
+The pipe approach broke because `samtools mpileup -r` needs an indexed BAM, and pipes have no index. Let me fix that by materializing a per-region filtered BAM into a tempdir, then run mpileup against it.
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:32Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:37Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:46Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:54Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:21:57Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Re-run tests after fixing mpileup pipe issue
+
+`perl -c /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl && bash /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh 2>&1`
+
+```text
+Exit code 1
+/home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl syntax OK
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test1 fwd+fwd seq with side-1 variant
+PASS  test1 TSV chr1:150
+PASS  test1 TSV chr2:50 (no variant)
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test2 narrow window anchors on breakpoint
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test3 fwd+rev seq with both-side variants and RC
+FAIL  test3 TSV chr2:100 (variant on rev side, genomic order)
+  expected: chr2	100	G	t	10	2	0	0	8
+  got:      chr2	100	G	t	10	0	0	2	8
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:07Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:09Z)**_
+
+The script logic is correct — I had a typo in my test expectation. The chr2 ref base is `G`, so the 2 reference-matching reads land in the `G` column, not `A`. Fixing the assertion:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:11Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:14Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Re-run tests with corrected expectation
+
+`bash /home/lhhung/fast_fusion_finder/tests/test_breakpointPileup.sh 2>&1`
+
+```text
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test1 fwd+fwd seq with side-1 variant
+PASS  test1 TSV chr1:150
+PASS  test1 TSV chr2:50 (no variant)
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test2 narrow window anchors on breakpoint
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test3 fwd+rev seq with both-side variants and RC
+PASS  test3 TSV chr2:100 (variant on rev side, genomic order)
+PASS  test3 FASTA header records side strands
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+PASS  test4 zero-coverage falls back to ref
+
+all tests passed
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:17Z)**_
+
+All 8 assertions pass. Let me sync the Dockerfiles copy with the bug fix:
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:19Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Sync Dockerfiles copy
+
+`cp /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl && diff -q /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl && echo "in sync"`
+
+```text
+in sync
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:32Z)**_
+
+Test summary — `tests/test_breakpointPileup.sh` exercises five behaviors against a synthetic chr1 (200 As) + chr2 (200 Gs) reference and 30 hand-rolled reads:
+
+| # | Test | What it proves |
+|---|------|----------------|
+| 1 | `chr1:51:150;chr2:50:149`, W=50, 8/10 reads carry T at chr1:150 | Forward+forward consensus + lowercase variant + TSV counts |
+| 1b | TSV row at non-variant chr2:50 | Reference base flows through unchanged |
+| 2 | Same breakpoint with W=5 | Window anchors on the **breakpoint position**, not the file's range bounds |
+| 3 | `chr1:51:150;chr2:149:100` (side 2 reversed) with variants on both sides | RC preserves variant lowercase and moves the variant to the correct transcript-order position; FASTA header records resolved strands; pileup TSV stays in genomic order |
+| 4 | Empty reads list | Zero-coverage columns fall back to plain reference |
+
+A real bug surfaced and got fixed: `samtools mpileup -r` requires an indexed BAM, but the original script piped `samtools view` straight into mpileup. mpileup couldn't index a stream and silently emitted nothing. Now `consensusForRegion` materializes the per-region filtered BAM into a tempdir, indexes it, then pileup. Tempdir is cleaned up by `File::Temp` on exit.
+
+Files touched:
+- [bin/breakpointPileup.pl](bin/breakpointPileup.pl) — pipe → tempdir+index fix
+- [widgets/.../Dockerfiles/breakpointPileup.pl](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl) — synced
+- [tests/test_breakpointPileup.sh](tests/test_breakpointPileup.sh) — new
+
+Want me to commit + push the test, the bug fix, and the windowing/lowercase/TSV changes together?
+
+---
+
+_**User (2026-04-29 20:22:52Z)**_
+
+yes do this
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:54Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:22:55Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check current state before committing
+
+`git -C /home/lhhung/fast_fusion_finder status`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   bin/breakpointPileup.pl
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/
+	tests/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+</details></tool-use>
