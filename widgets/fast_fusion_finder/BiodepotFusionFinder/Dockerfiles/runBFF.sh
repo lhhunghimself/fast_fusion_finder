@@ -5,6 +5,23 @@ printenv
 if [ -n "$filterends" ]; then
   echo " filterEnds.pl  ${inputArgs[@]} > $filterends"
   eval " filterEnds.pl  ${inputArgs[@]} > $filterends"
+
+  : "${BAM:?BAM environment variable is required for breakpointPileup.pl}"
+  : "${REFERENCE:?REFERENCE environment variable is required for breakpointPileup.pl}"
+
+  bp_file=""
+  for ((i=0; i<${#inputArgs[@]}; i++)); do
+    case "${inputArgs[i]}" in
+      -b|--breakpointFile)        bp_file="${inputArgs[i+1]}";;
+      --breakpointFile=*)         bp_file="${inputArgs[i]#--breakpointFile=}";;
+      -b=*)                       bp_file="${inputArgs[i]#-b=}";;
+    esac
+  done
+  : "${bp_file:?could not find -b/--breakpointFile in args for breakpointPileup.pl}"
+
+  pileup_out="${pileup:-${filterends}.fa}"
+  echo "breakpointPileup.pl --reads $filterends --bam $BAM --ref $REFERENCE -b $bp_file > $pileup_out"
+  breakpointPileup.pl --reads "$filterends" --bam "$BAM" --ref "$REFERENCE" -b "$bp_file" > "$pileup_out"
 else
   echo "/data/debug/filterSam.pl ${inputArgs[@]}"
   eval "/data/debug/filterSam.pl ${inputArgs[@]}"

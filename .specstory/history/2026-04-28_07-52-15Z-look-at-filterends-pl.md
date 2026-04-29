@@ -2517,3 +2517,647 @@ origin	git@github.com:lhhunghimself/fast_fusion_finder.git (push)
 * master 7df79ee first commit
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:51Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:55Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Stage and commit changes
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add bin/breakpointPileup.pl .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Derive fusion strand from breakpoint coord order in breakpointPileup.pl
+
+Trust the start:end ordering already produced by the upstream majority-rule
+breakpoint generator (start<end => +, start>end => -) instead of recounting
+FLAG strands per region. Sides are RC'd accordingly before concatenation,
+and --guideFile remains as a full override.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+```text
+[master 82f0a79] Derive fusion strand from breakpoint coord order in breakpointPileup.pl
+ 3 files changed, 1029 insertions(+), 30 deletions(-)
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:13:59Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Push master to origin with tracking
+
+`git -C /home/lhhung/fast_fusion_finder push -u origin master 2>&1`
+
+```text
+To github.com:lhhunghimself/fast_fusion_finder.git
+   7df79ee..82f0a79  master -> master
+Branch 'master' set up to track remote branch 'master' from 'origin'.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 08:14:01Z)**_
+
+Committed as `82f0a79` and pushed to `origin/master`. Tracking is now set up so future pushes can be a bare `git push`.
+
+---
+
+_**User (2026-04-28 14:23:08Z)**_
+
+How is this used right now? Is it called after filterSam.pl?
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 14:23:13Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:23:15Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check pipeline wiring scripts
+
+`cat /home/lhhung/fast_fusion_finder/bin/runBFF.sh && echo "---widgets runBFF---" && cat /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh 2>/dev/null && echo "---bin contents---" && ls /home/lhhung/fast_fusion_finder/bin/`
+
+```text
+#!/bin/bash
+shopt -s extglob
+inputArgs=("$@")
+printenv
+if [ -n "$filterends" ]; then
+  echo " filterEnds.pl  ${inputArgs[@]} > $filterends"
+  eval " filterEnds.pl  ${inputArgs[@]} > $filterends"
+else
+  echo "filterSam.pl ${inputArgs[@]}"
+  eval "filterSam.pl ${inputArgs[@]}"
+fi
+---widgets runBFF---
+#!/bin/bash
+shopt -s extglob
+inputArgs=("$@")
+printenv
+if [ -n "$filterends" ]; then
+  echo " filterEnds.pl  ${inputArgs[@]} > $filterends"
+  eval " filterEnds.pl  ${inputArgs[@]} > $filterends"
+else
+  echo "/data/debug/filterSam.pl ${inputArgs[@]}"
+  eval "/data/debug/filterSam.pl ${inputArgs[@]}"
+fi
+---bin contents---
+breakpointPileup.pl
+cleanup.sh
+filterEnds.pl
+filterSam.pl
+reset.sh
+runBFF.sh
+runDorado.sh
+runIndex.sh
+runMiniMap2.sh
+scanAndCopy.sh
+send_mail.sh
+simulate_copy.sh
+start.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:23:23Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:23:31Z)**_
+
+Right now, it isn't called by anything — `breakpointPileup.pl` is standalone. The current pipeline ([bin/runBFF.sh](bin/runBFF.sh)) only branches between `filterSam.pl` (older, all-in-one path) and `filterEnds.pl` (newer two-end path that emits a read-names file via the `$filterends` env var). Nothing downstream consumes those reads yet.
+
+It's also not designed for `filterSam.pl`'s output. `filterSam.pl` writes per-breakpoint SAM directories and stats; `breakpointPileup.pl` expects:
+- a flat read-names file (the stdout of `filterEnds.pl`)
+- the original coordinate-sorted, indexed BAM
+- the reference FASTA + .fai
+- the same breakpoint file `filterEnds.pl` was given
+
+So the intended chain is `filterEnds.pl > reads.txt` then `breakpointPileup.pl --reads reads.txt --bam … --ref … -b breakpoints.txt`.
+
+Want me to wire it into `runBFF.sh` so a `$pileupOutput` (or similar) env var triggers a follow-up call after `filterEnds.pl`? If so, I'd also need the BAM and reference paths threaded through — happy to do it once you confirm where those come from in the widget (looks like `bam_dir` / `genome_file` from the Start widget, but I want to check before editing).
+
+---
+
+_**User (2026-04-28 14:25:31Z)**_
+
+What you have is fine but is this documented in the README.md?
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 14:25:34Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:25:34Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Find README files
+
+`find /home/lhhung/fast_fusion_finder -maxdepth 3 -iname "README*" -not -path "*/.git/*" 2>/dev/null`
+
+```text
+(Bash completed with no output)
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:25:38Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check git tracked readme
+
+`git -C /home/lhhung/fast_fusion_finder ls-files | grep -i readme`
+
+```text
+widgets/fast_fusion_finder/downloadURL/Dockerfiles/README.md
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:25:42Z)**_
+
+No — there's no top-level `README.md`. The only README in the repo is [widgets/fast_fusion_finder/downloadURL/Dockerfiles/README.md](widgets/fast_fusion_finder/downloadURL/Dockerfiles/README.md), which is for an unrelated widget. `breakpointPileup.pl` is undocumented outside of the header comment in the script itself.
+
+Want me to add a top-level `README.md` covering the pipeline (filterEnds.pl → breakpointPileup.pl, expected inputs, the breakpoint-file strand-encoding convention)? Or just a short section on `breakpointPileup.pl` somewhere you point me at?
+
+---
+
+_**User (2026-04-28 14:27:26Z)**_
+
+For now just put a version of breakPointPileup at the top level with a README.md on how to build it so that we can test it.
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 14:27:31Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:27:32Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check top-level layout
+
+`ls /home/lhhung/fast_fusion_finder/`
+
+```text
+bin
+fast_fusion_finder.ows
+guidesToBreakpoints.pl
+widgets
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:27:35Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Copy script to top level
+
+`cp /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/breakpointPileup.pl && ls -la /home/lhhung/fast_fusion_finder/breakpointPileup.pl`
+
+```text
+-rwxrwxr-x 1 lhhung lhhung 9371 Apr 28 14:27 /home/lhhung/fast_fusion_finder/breakpointPileup.pl
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:28:06Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```md
+# breakpointPileup.pl
+
+A standalone consensus-sequence builder for fusion breakpoints. Takes the
+read-names list produced by `filterEnds.pl`, plus the original BAM and
+reference, and emits one FASTA record per breakpoint line: per-position
+consensus over the supporting reads (reference base by default, replaced when
+a single non-reference base is seen in more than `--threshold` of the read
+bases at that column), with each side reverse-complemented when the
+breakpoint coordinates indicate the `-` strand.
+
+Top-level `breakpointPileup.pl` is the test copy; the version under `bin/`
+is what gets shipped inside the BFF Docker image.
+
+## Requirements
+
+There is nothing to compile — it is a Perl script that shells out to
+`samtools`. You need:
+
+- Perl 5 (any modern distribution; the script uses only `Getopt::Long`,
+  which is core)
+- `samtools` 1.12 or newer on `$PATH` (1.12 added `samtools view -N`,
+  the read-name filter this script depends on)
+
+Verify with:
+
+\```bash
+perl -v
+samtools --version | head -1   # 1.12+
+perl -c ./breakpointPileup.pl  # syntax check, prints "syntax OK"
+\```
+
+## Inputs
+
+1. **`--reads reads.txt`** — newline-separated read names. The expected
+   producer is `bin/filterEnds.pl`, whose stdout is exactly this format.
+2. **`--bam in.bam`** — the original alignment. Must be coordinate-sorted
+   and indexed (`samtools sort` + `samtools index`).
+3. **`--ref ref.fa`** — the reference FASTA used for alignment. Must have
+   a matching `.fai` (`samtools faidx ref.fa`).
+4. **`--breakpointFile breakpoints.txt`** (`-b`) — the same breakpoint file
+   `filterEnds.pl` was given. Each non-comment line is one fusion in the
+   form `chr:start:end;chr:start:end`. Strand is encoded by coordinate
+   order: `start < end` is `+`, `start > end` is `-`. Lines starting with
+   `#` are ignored.
+
+Optional:
+
+- **`--guideFile guides.txt`** (`-G`) — overrides the breakpoint-file's
+  encoded strand. Format is the same as the input to
+  `guidesToBreakpoints.pl`: `group<TAB>chr:pos<TAB>+/-`. Each group's
+  halves are matched to breakpoint regions by chromosome+position,
+  reverse-complemented per the guide direction, and concatenated in the
+  order the entries appear in the file (first listed = 5' partner).
+- **`--threshold 0.5`** (`-t`) — fraction of read bases at a column needed
+  to override the reference base. Strict majority (`>`, not `>=`).
+- **`--minDepth 1`** (`-d`) — columns with fewer reads than this fall
+  back to the reference base regardless of what was observed.
+- **`--verbose`** (`-v`) — echo the `samtools` invocations to stderr.
+
+## Running it
+
+End-to-end from a sorted+indexed BAM:
+
+\```bash
+# 1. Get supporting read names for each breakpoint.
+bin/filterEnds.pl --first first.bam --last last.bam \
+                  -b breakpoints.txt > reads.txt
+
+# 2. Build the fusion FASTA.
+./breakpointPileup.pl --reads reads.txt \
+                     --bam   all.bam \
+                     --ref   ref.fa \
+                     -b      breakpoints.txt \
+                     > fusion.fa
+\```
+
+One FASTA record per non-comment line in `breakpoints.txt`. Header is the
+two regions with their resolved strands, e.g.
+`>chr15:74318559-74336132+;chr17:38428464-38512385- length=...`.
+
+## Quick smoke test
+
+\```bash
+samtools sort -o test.sorted.bam test.bam
+samtools index test.sorted.bam
+samtools faidx ref.fa
+
+# Minimal breakpoint file, one fusion:
+printf 'chr15:74318559:74336132;chr17:38428464:38512385\n' > bp.txt
+
+bin/filterEnds.pl --first test.sorted.bam --last test.sorted.bam \
+                  -b bp.txt > reads.txt
+./breakpointPileup.pl --reads reads.txt --bam test.sorted.bam \
+                     --ref ref.fa -b bp.txt
+\```
+
+If `reads.txt` is empty, every consensus column will fall back to the
+reference base, so the output FASTA is the reference sequence over each
+region (RC'd where the breakpoint encodes `-`). That's the cheapest way
+to confirm the plumbing without needing real fusion-supporting reads.
+
+```
+
+```text
+File created successfully at: /home/lhhung/fast_fusion_finder/README.md
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:28:15Z)**_
+
+Done. Top-level [breakpointPileup.pl](breakpointPileup.pl) is a copy of the bin/ version, and [README.md](README.md) covers:
+
+- What there is to "build" (nothing — Perl + samtools 1.12+, with the verify commands)
+- The four required inputs and the breakpoint-file strand-encoding convention
+- An end-to-end run example (`filterEnds.pl > reads.txt` → `breakpointPileup.pl > fusion.fa`)
+- A smoke-test recipe that confirms the pipeline plumbing even with no fusion reads (consensus falls back to reference, RC'd by encoded strand)
+
+Two things to call out:
+
+- I documented the top-level script as the **test copy** and `bin/` as the shipped/Docker version. If you'd rather there be only one, I'd suggest deleting `bin/breakpointPileup.pl` and pointing `runBFF.sh` at the top-level path — but then we've lost the parallel structure with `filterEnds.pl`. Let me know which way you'd like.
+- The two copies will drift if only one gets edited. If we're keeping both, I should add a one-liner to commit hygiene (or wire `bin/breakpointPileup.pl` to be a symlink to the top-level). Happy to do either.
+
+Want me to commit + push these?
+
+---
+
+_**User (2026-04-28 14:31:01Z)**_
+
+To make the widget - just go do the Dockerfile where flterEnds.pl is. Modify runBFF.sh to call the script. The two parameters will be provided as environment variables $BAM and $REFERENCE. Error out if they are not defined
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 14:31:52Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:31:52Z)**_
+
+<tool-use data-tool-type="read" data-tool-name="Read"><details>
+<summary>Tool use: **Read**</summary>
+ `./widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile`
+
+```text
+1	ARG ALPINE_VERSION=3.15
+2	
+3	FROM alpine:${ALPINE_VERSION} AS alpine-build-samtools
+4	
+5	ARG SAMTOOLS_VERSION=1.13
+6	
+7	RUN apk update && apk add build-base wget zlib-dev tar bzip2-dev xz-dev \
+8	    curl-dev ncurses-dev ncurses-static curl-static zlib-static bzip2-static \
+9	    nghttp2-static openssl-libs-static brotli-static
+10	
+11	WORKDIR /build
+12	RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2
+13	RUN tar -xf samtools-${SAMTOOLS_VERSION}.tar.bz2
+14	WORKDIR /build/samtools-${SAMTOOLS_VERSION}
+15	RUN ./configure && \
+16	    make -j 4
+17	RUN strip samtools
+18	
+19	FROM alpine:${ALPINE_VERSION}
+20	ARG SAMTOOLS_VERSION=1.13
+21	RUN apk add --no-cache bash perl libbz2 zlib libcurl xz-libs &&  rm -rf /var/cache/apk/*
+22	WORKDIR / 
+23	COPY --from=alpine-build-samtools /build/samtools-${SAMTOOLS_VERSION}/samtools /usr/local/bin/samtools
+24	ADD filterSam.pl /usr/local/bin/filterSam.pl
+25	ADD filterEnds.pl /usr/local/bin/filterEnds.pl
+26	ADD runBFF.sh /usr/local/bin/runBFF.sh
+27
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:03Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:03Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+List Dockerfiles directory
+
+`ls /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/`
+
+```text
+Dockerfile
+filterEnds.pl
+filterSam.pl
+runBFF.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:07Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Copy script into Dockerfiles directory
+
+`cp /home/lhhung/fast_fusion_finder/bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl`
+
+```text
+(Bash completed with no output)
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:12Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:15Z)**_
+
+<tool-use data-tool-type="read" data-tool-name="Read"><details>
+<summary>Tool use: **Read**</summary>
+ `./widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh`
+
+```text
+File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:24Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```sh
+#!/bin/bash
+shopt -s extglob
+inputArgs=("$@")
+printenv
+if [ -n "$filterends" ]; then
+  echo " filterEnds.pl  ${inputArgs[@]} > $filterends"
+  eval " filterEnds.pl  ${inputArgs[@]} > $filterends"
+
+  : "${BAM:?BAM environment variable is required for breakpointPileup.pl}"
+  : "${REFERENCE:?REFERENCE environment variable is required for breakpointPileup.pl}"
+
+  bp_file=""
+  for ((i=0; i<${#inputArgs[@]}; i++)); do
+    case "${inputArgs[i]}" in
+      -b|--breakpointFile)        bp_file="${inputArgs[i+1]}";;
+      --breakpointFile=*)         bp_file="${inputArgs[i]#--breakpointFile=}";;
+      -b=*)                       bp_file="${inputArgs[i]#-b=}";;
+    esac
+  done
+  : "${bp_file:?could not find -b/--breakpointFile in args for breakpointPileup.pl}"
+
+  pileup_out="${pileup:-${filterends}.fa}"
+  echo "breakpointPileup.pl --reads $filterends --bam $BAM --ref $REFERENCE -b $bp_file > $pileup_out"
+  breakpointPileup.pl --reads "$filterends" --bam "$BAM" --ref "$REFERENCE" -b "$bp_file" > "$pileup_out"
+else
+  echo "/data/debug/filterSam.pl ${inputArgs[@]}"
+  eval "/data/debug/filterSam.pl ${inputArgs[@]}"
+fi
+
+```
+
+```text
+The file /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:28Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Syntax-check shell and list final dir
+
+`bash -n /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh && echo "shell syntax OK" && ls -la /home/lhhung/fast_fusion_finder/widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/`
+
+```text
+shell syntax OK
+total 68
+drwxr-xr-x 2 lhhung lhhung  4096 Apr 28 14:32 .
+drwxr-xr-x 4 lhhung lhhung  4096 May 12  2025 ..
+-rwxrwxr-x 1 lhhung lhhung  9371 Apr 28 14:32 breakpointPileup.pl
+-rw------- 1 lhhung lhhung  1048 Apr 28 14:32 Dockerfile
+-rwx------ 1 lhhung lhhung 14051 May 12  2025 filterEnds.pl
+-rwx------ 1 lhhung lhhung 24568 May 12  2025 filterSam.pl
+-rwx------ 1 lhhung lhhung  1117 Apr 28 14:32 runBFF.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:34Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:32:43Z)**_
+
+Done. Three changes in [widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/):
+
+- **[breakpointPileup.pl](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl)** — copied in from `bin/`.
+- **[Dockerfile](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile#L26)** — added `ADD breakpointPileup.pl /usr/local/bin/breakpointPileup.pl` next to the existing `filterEnds.pl` ADD.
+- **[runBFF.sh](widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh)** — in the `filterends` branch, after `filterEnds.pl` runs:
+  - `: "${BAM:?…}"` and `: "${REFERENCE:?…}"` — bash idiom that errors out with a message if either is unset/empty.
+  - Walks `inputArgs` to recover the `-b` / `--breakpointFile` value (handles space, `=`, and short-`=` forms) and errors out if not found.
+  - Calls `breakpointPileup.pl --reads "$filterends" --bam "$BAM" --ref "$REFERENCE" -b "$bp_file" > "$pileup_out"`, where `$pileup_out` is `$pileup` if set, else `${filterends}.fa`.
+
+A couple of things to flag:
+
+- I picked `${filterends}.fa` as the default output path because there's no env var for it yet — easy to change once you decide. If you'd prefer it always require an explicit `$pileup` (mirroring how `$filterends` triggers/locates filterEnds output), I can swap that to a `:?` check too.
+- `bin/breakpointPileup.pl` and the Dockerfiles copy are now duplicates that will drift. If you want, I can replace one with a symlink, or have the Dockerfile pull from `../../../../bin/breakpointPileup.pl` (Docker build context permitting).
+
+Want me to commit and push?
+
+---
+
+_**User (2026-04-28 14:33:46Z)**_
+
+Replace the top level one with a symlink.
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-28 14:33:55Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:33:57Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Replace top-level file with relative symlink to bin/
+
+`rm /home/lhhung/fast_fusion_finder/breakpointPileup.pl && ln -s bin/breakpointPileup.pl /home/lhhung/fast_fusion_finder/breakpointPileup.pl && ls -la /home/lhhung/fast_fusion_finder/breakpointPileup.pl && readlink /home/lhhung/fast_fusion_finder/breakpointPileup.pl && perl -c /home/lhhung/fast_fusion_finder/breakpointPileup.pl`
+
+```text
+lrwxrwxrwx 1 lhhung lhhung 23 Apr 28 14:33 /home/lhhung/fast_fusion_finder/breakpointPileup.pl -> bin/breakpointPileup.pl
+bin/breakpointPileup.pl
+/home/lhhung/fast_fusion_finder/breakpointPileup.pl syntax OK
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:04Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:04Z)**_
+
+Symlink in place. Let me also fix the README, which still describes the top level as a "test copy."
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:09Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:11Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Show current change set
+
+`git -C /home/lhhung/fast_fusion_finder status`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	README.md
+	breakpointPileup.pl
+	widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:16Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-28 14:34:19Z)**_
+
+[breakpointPileup.pl](breakpointPileup.pl) at the top level is now a relative symlink to [bin/breakpointPileup.pl](bin/breakpointPileup.pl). Verified by running `perl -c` through it. README updated to reflect the layout: bin/ canonical, top-level symlink for convenience, Dockerfiles/ a separate ADD-context copy that needs manual sync.
+
+Outstanding uncommitted changes:
+
+- new: `README.md`, top-level `breakpointPileup.pl` (symlink), `widgets/.../Dockerfiles/breakpointPileup.pl`
+- modified: Dockerfile (added the new ADD line), runBFF.sh (BAM/REFERENCE check + breakpointPileup.pl call)
+
+Want me to commit and push?
+
+---
+
+_**User (2026-04-29 20:02:58Z)**_
+
+did you commit and push?
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:02Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 20:03:03Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check current git state
+
+`git -C /home/lhhung/fast_fusion_finder status && echo "---" && git -C /home/lhhung/fast_fusion_finder log --oneline -3`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/.project.json
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile
+	modified:   widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/runBFF.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/
+	README.md
+	breakpointPileup.pl
+	widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+---
+82f0a79 Derive fusion strand from breakpoint coord order in breakpointPileup.pl
+7df79ee first commit
+```
+</details></tool-use>
