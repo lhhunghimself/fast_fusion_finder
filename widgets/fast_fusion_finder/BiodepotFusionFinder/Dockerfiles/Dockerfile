@@ -24,4 +24,5 @@ COPY --from=alpine-build-samtools /build/samtools-${SAMTOOLS_VERSION}/samtools /
 ADD filterSam.pl /usr/local/bin/filterSam.pl
 ADD filterEnds.pl /usr/local/bin/filterEnds.pl
 ADD breakpointPileup.pl /usr/local/bin/breakpointPileup.pl
+ADD processBreakpointDir.sh /usr/local/bin/processBreakpointDir.sh
 ADD runBFF.sh /usr/local/bin/runBFF.sh
