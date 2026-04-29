@@ -5602,32 +5602,395 @@ The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully
 ```
 </details></tool-use>
 
-_**Agent (claude-opus-4-7 2026-04-29 21:00:09Z)**_
+_**Agent (claude-opus-4-7 2026-04-29 21:00:10Z)**_
 
 <tool-use data-tool-type="write" data-tool-name="Edit"><details>
 <summary>Tool use: **Edit**</summary>
 
-**Input:**
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
 
-- file_path: `/home/lhhung/fast_fusion_finder/README.md`
-- new_string:
+_**Agent (claude-opus-4-7 2026-04-29 21:00:24Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push split-record change
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add bin/breakpointPileup.pl widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/breakpointPileup.pl tests/test_breakpointPileup.sh README.md .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Emit each fusion side as its own FASTA record
+
+breakpointPileup.pl previously emitted a single concatenated record per
+fusion, with both halves joined under a combined header. Splitting them
+makes each side independently usable downstream (BLAST per side, length
+checks, etc.) and matches the natural pairing of records in the file.
+
+- emitFusedPair / emitFusedGroups: one emitFasta call per side instead of
+  joining @parts and emitting once.
+- Header is now the side's region + resolved strand, e.g.
+    >chr15:74318559-74336132+ length=100
+    >chr17:38428464-38512385- length=100
+  in 5'->3' order. With --guideFile the group name leads the header.
+- tests/test_breakpointPileup.sh updated: each test asserts on two
+  records (side 1 and side 2) and the strand annotations now appear in
+  separate headers.
+- README updated to describe the new per-side output shape.
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master 1fd9bf0] Emit each fusion side as its own FASTA record
+ 6 files changed, 467 insertions(+), 62 deletions(-)
+To github.com:lhhunghimself/fast_fusion_finder.git
+   fa3c645..1fd9bf0  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:00:28Z)**_
+
+Pushed as `1fd9bf0`. Each fusion now emits two FASTA records — 5' partner first, 3' partner second — each with its own region+strand header. All 12 fixture-test assertions pass, real data run on `/mnt/pikachu/bff-test/breakpoint_files` produces the expected split output, and `biodepot/bff:test` is rebuilt locally.
+
+---
+
+_**User (2026-04-29 21:01:25Z)**_
+
+Did you run it on the test case I gave you
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 21:01:29Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:01:30Z)**_
+
+Yes — same `/mnt/pikachu/bff-test/breakpoint_files` against the cellranger Ensembl FASTA, written to `/tmp/bff-out-host`. Showing both clusters:
+
+_**Agent (claude-opus-4-7 2026-04-29 21:01:31Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Re-display the test-case outputs
+
+`ls -la /tmp/bff-out-host/ && echo "---cluster 1---" && cat /tmp/bff-out-host/chr15-74024222-chr17-40346374.fa && echo "---cluster 2---" && cat /tmp/bff-out-host/chr15-74024223-chr17-40346371.fa`
+
+```text
+total 320
+drwxrwxr-x   2 lhhung lhhung   4096 Apr 29 20:59 .
+drwxrwxrwt 606 root   root   294912 Apr 29 21:00 ..
+-rw-rw-r--   1 lhhung lhhung    272 Apr 29 20:59 chr15-74024222-chr17-40346374.fa
+-rw-rw-r--   1 lhhung lhhung   5237 Apr 29 20:59 chr15-74024222-chr17-40346374.tsv
+-rw-rw-r--   1 lhhung lhhung    272 Apr 29 20:59 chr15-74024223-chr17-40346371.fa
+-rw-rw-r--   1 lhhung lhhung   5237 Apr 29 20:59 chr15-74024223-chr17-40346371.tsv
+---cluster 1---
+>15:74024123-74024222+ length=100
+GAGAGTCTCCAGGAGTCTTTGACTAAATCTCCAAGCTGGAATGTGAGCTCTGAGCAGCTAGTATAGGATGCCCTTACTGG
+GAAAGGGGAGGGAGGCTATG
+>17:40346374-40346473+ length=100
+GAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCAGTGCCTTCTTCCTCTGCTTGTCGGAATGCT
+GACCAAGATTCTAGGCCATG
+---cluster 2---
+>15:74024124-74024223+ length=100
+AGAGTCTCCAGGAGTCTTTGACTAAATCTCCAAGCTGGAATGTGAGCTCTGAGCAGCTAGTATAGGATGCCCTTACTGGG
+AAAGGGGAGGGAGGCTATGG
+>17:40346371-40346470+ length=100
+TGGGAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCAGTGCCTTCTTCCTCTGCTTGTCGGAAT
+GCTGACCAAGATTCTAGGCC
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:01:36Z)**_
+
+Two records per cluster, 100 bp each, headers carrying region + strand. Cluster 1 anchors on `chr15:74024222 / chr17:40346374` (matches filename); cluster 2 anchors on `chr15:74024223 / chr17:40346371`. No lowercase variants — only 2 supporting reads per cluster, so depth is too thin to flip any column away from reference. The `.tsv` files have the raw per-position counts if you want to look at the fine-grained evidence.
+
+---
+
+_**User (2026-04-29 21:02:24Z)**_
+
+Rewrite the README.md to give instructions on how to use this
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 21:02:37Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:03:28Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```md
+# Fusion breakpoint consensus
+
+Build per-base consensus sequences over the supporting reads for every
+fusion breakpoint detected by the BFF pipeline. The two halves of each
+fusion are emitted as **separate FASTA records** (5' partner, then 3'
+partner), windowed around the junction; columns where a non-reference
+base wins a strict majority of the reads are emitted in lowercase.
+
+Two entry points:
+
+- [`bin/breakpointPileup.pl`](bin/breakpointPileup.pl) — the core script.
+  Consumes a read-names list, the original BAM, the reference FASTA, and
+  a breakpoint file; produces one FASTA record per side and (optionally)
+  a per-position TSV of base counts. Use this when you already have
+  those four pieces.
+- [`bin/processBreakpointDir.sh`](bin/processBreakpointDir.sh) — batch
+  wrapper for a `breakpoint_files/`-style directory. For each cluster it
+  rebuilds the SAM into a sorted BAM, derives the reads list and the
+  breakpoint encoding from `*.nearby.readnamescoords`, and runs the core
+  script. Use this when you have BFF cluster output and a reference.
+
+## Layout
+
+\```
+bin/
+├── breakpointPileup.pl       canonical script
+├── processBreakpointDir.sh   batch wrapper
+├── filterEnds.pl             upstream: read-name filter
+└── ...
+breakpointPileup.pl           symlink → bin/breakpointPileup.pl
+tests/test_breakpointPileup.sh   self-contained fixture test
+widgets/.../Dockerfiles/      copies that get baked into biodepot/bff:test
+\```
+
+`breakpointPileup.pl` lives at `bin/breakpointPileup.pl`; the top-level
+file is a symlink for convenience. The Dockerfiles directory holds a
+build-context copy of each script (kept in sync manually).
+
+## Requirements
+
+There is nothing to compile.
+
+- `samtools` 1.12 or newer on `$PATH` (1.12 added `samtools view -N`,
+  the read-name filter the script depends on)
+- `perl` 5 with `Getopt::Long` and `File::Temp` (both core)
+- the reference FASTA must have a `.fai` (built lazily by the wrapper
+  when missing, but only if the directory is writable)
+
+Verify:
+
+\```bash
+samtools --version | head -1   # 1.12+
+perl -c bin/breakpointPileup.pl
+\```
+
+## Three ways to run
+
+### 1. Container (zero host setup)
+
+The `biodepot/bff:test` image bundles `samtools`, `perl`, and both
+scripts under `/usr/local/bin`.
+
+\```bash
+# build once
+docker build -t biodepot/bff:test \
+    widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles
+
+# run on a breakpoint_files-style directory
+docker run --rm \
+    -u "$(id -u):$(id -g)" \
+    -v /path/to/breakpoint_files:/in:ro \
+    -v /path/to/reference_dir:/ref:ro \
+    -v /path/to/output:/out \
+    biodepot/bff:test \
+    processBreakpointDir.sh /in /ref/genome.fa /out 100
+\```
+
+The `-u` flag makes the output files owned by your host user instead of
+root. The reference directory needs the `.fa.fai`; create it once on
+the host with `samtools faidx genome.fa` if it isn't there.
+
+### 2. Standalone
+
+If `samtools` and `perl` are on the host, just put the repo's `bin/`
+on `$PATH` (so the wrapper can find `breakpointPileup.pl`) and run:
+
+\```bash
+PATH="$PWD/bin:$PATH" \
+bin/processBreakpointDir.sh \
+    /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    /path/to/output \
+    100
+\```
+
+### 3. As part of the BFF widget pipeline
+
+`runBFF.sh` (the widget entrypoint) calls `breakpointPileup.pl`
+automatically when both `$BAM` and `$REFERENCE` are set:
+
+\```bash
+WINDOW=100 \
+pileup=/data/fusion.fa \
+pileupTable=/data/variants.tsv \
+filterends=/data/reads.txt \
+BAM=/data/all.sorted.bam REFERENCE=/data/genome.fa \
+runBFF.sh --first first.bam --last last.bam -b breakpoints.txt
+\```
+
+If `$BAM` or `$REFERENCE` is empty the pileup step is skipped and
+`runBFF.sh` runs `filterEnds.pl` alone, matching the legacy behaviour.
+
+## Inputs
+
+### For `processBreakpointDir.sh`
+
+| Path | Purpose |
+|------|---------|
+| `INPUT_DIR` | A `breakpoint_files/`-style directory with `*.nearby.sam` (alignment dump, no `@HD`/`@SQ`) and matching `*.nearby.readnamescoords`. |
+| `REFERENCE_FASTA` | The genome FASTA used for alignment. Needs a `.fai`. |
+| `OUTPUT_DIR` | Created if missing. One `<name>.fa` and one `<name>.tsv` per cluster. |
+| `WINDOW` | Optional half-window size in bp (default `100`). Each side gets `WINDOW` bases on the transcript-internal flank of the breakpoint. |
+
+The wrapper auto-detects UCSC vs Ensembl contig naming. If the SAM uses
+`chr15`-style names but the reference doesn't, `chr` is stripped on the
+fly from `RNAME`, `RNEXT`, and the breakpoint encoding before mpileup.
+
+### For `breakpointPileup.pl`
+
+| Flag | Required | Notes |
+|------|----------|-------|
+| `--reads reads.txt` | yes | Newline-separated read names — typically the stdout of `filterEnds.pl`. |
+| `--bam in.bam` | yes | Coordinate-sorted and indexed. |
+| `--ref ref.fa` | yes | With matching `.fai`. |
+| `-b breakpoints.txt` | yes | One fusion per line: `chr:start:end;chr:start:end`. Strand encoded by coord order — `start<end` is `+`, `start>end` is `-`. Lines starting with `#` are ignored. |
+| `--window N` | no, default 100 | bp per side. |
+| `--pileupOut path` | no | Write a per-position TSV (chr, pos, ref, consensus, depth, A, C, G, T) alongside stdout. |
+| `--threshold F` | no, default 0.5 | Strict majority needed to call a non-reference base. |
+| `--minDepth D` | no, default 1 | Columns below this depth fall back to the reference. |
+| `--guideFile guides.txt` (`-G`) | no | `group<TAB>chr:pos<TAB>+/-`. Overrides the breakpoint-file's encoded strand and groups output by guide name. |
+
+## Output
+
+For each non-comment line of the breakpoint file, two FASTA records
+are written to stdout (or to a file if you redirect):
+
+\```
+>15:74024123-74024222+ length=100
+GAGAGTCTCCAGGAGTCTTTGACTAAATCTCCAAGCTGGAATGTGAGCTCTGAGCAGCTAGTATAGGATGCCCTTACTGG
+GAAAGGGGAGGGAGGCTATG
+>17:40346374-40346473+ length=100
+GAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCAGTGCCTTCTTCCTCTGCTTGTCGGAATGCT
+GACCAAGATTCTAGGCCATG
+\```
+
+Headers are `<region><strand> length=<N>`; sides are emitted 5' first
+then 3', in the order they appear on the breakpoint line.
+Lowercase letters mark columns where a non-reference base won
+`> --threshold` of the parsed reads. The strand annotation in the
+header reflects what was decoded from the breakpoint file's coord
+order (or, with `--guideFile`, the guide direction).
+
+When `--pileupOut` is set, the companion TSV has one row per pileup
+column **in genomic order** (so for `-` strand sides the row order
+is the reverse of the FASTA letter order):
+
+\```
+#chr   pos    ref  consensus  depth  A  C  G  T
+15     74024124  G  G   2  0  0  2  0
+15     74024125  A  a   8  0  0  6  2
+...
+\```
+
+## Conventions worth knowing
+
+- **Strand from coord order.** The upstream BFF generator emits each
+  side with `start<end` for `+` and `start>end` for `-`. The script
+  trusts that encoding — no fallback to BAM FLAGs. If you supply your
+  own breakpoint file, follow the same convention or use `--guideFile`.
+- **Breakpoint position per side.** Side 1 (5' partner) → second coord
+  of the encoded `chr:start:end`. Side 2 (3' partner) → first coord.
+  This matches what `findBreakPoints` in `filterEnds.pl` writes.
+- **Window placement.** `5'+` and `3'-` use `[bp-W+1, bp]`; `5'-` and
+  `3'+` use `[bp, bp+W-1]`. So each FASTA record is `W` bases of the
+  partner gene's transcript-side flank ending at (or starting at) the
+  junction.
+- **Variant case.** Lowercase = non-reference call. Reverse complement
+  preserves case (`tr/ACGTNacgtn/TGCANtgcan/`).
+
+## Smoke test
+
+`tests/test_breakpointPileup.sh` builds a synthetic chr1/chr2 reference
+and ten reads, then exercises forward+forward, narrow window,
+forward+reverse with RC variants, and zero-coverage fallback:
+
+\```bash
+bash tests/test_breakpointPileup.sh
+\```
+
+All assertions should pass. The same suite runs unmodified inside the
+container against `/usr/local/bin/breakpointPileup.pl`.
 
 ```
-Two FASTA records per non-comment line in `breakpoints.txt` — the 5'
-partner first, then the 3' partner. Each header carries that side's
-region and resolved strand, e.g.
-`>chr15:74318559-74336132+ length=...` followed by
-`>chr17:38428464-38512385- length=...`.
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
 ```
+</details></tool-use>
 
-- old_string:
+_**Agent (claude-opus-4-7 2026-04-29 21:03:32Z)**_
 
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Show README change size
+
+`git -C /home/lhhung/fast_fusion_finder diff --stat README.md`
+
+```text
+ README.md | 262 ++++++++++++++++++++++++++++++++++++++++++--------------------
+ 1 file changed, 178 insertions(+), 84 deletions(-)
 ```
-One FASTA record per non-comment line in `breakpoints.txt`. Header is the
-two regions with their resolved strands, e.g.
-`>chr15:74318559-74336132+;chr17:38428464-38512385- length=...`.
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-29 21:03:39Z)**_
+
+[README.md](README.md) rewritten as full usage documentation. Outline:
+
+1. What the project does — split-record consensus over fusion breakpoints — and the two entry points (core script vs batch wrapper)
+2. Repo layout
+3. Requirements (samtools 1.12+, perl, .fai)
+4. **Three ways to run**: container (`biodepot/bff:test`), standalone with `PATH="$PWD/bin:$PATH"`, and embedded in the BFF widget pipeline via `runBFF.sh` env vars
+5. Inputs tables for both `processBreakpointDir.sh` and `breakpointPileup.pl`
+6. Output shape — sample FASTA + sample TSV
+7. Conventions (strand-from-coord-order, bp position per side, window placement, variant lowercase)
+8. Smoke-test pointer
+
+Want me to commit and push it?
+
+---
+
+_**User (2026-04-29 21:04:02Z)**_
+
+Yes do that
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-29 21:04:04Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-29 21:04:05Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check current state
+
+`git -C /home/lhhung/fast_fusion_finder status`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   README.md
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/
+
+no changes added to commit (use "git add" and/or "git commit -a")
 ```
-
-- replace_all: `false`
-
 </details></tool-use>
