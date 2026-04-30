@@ -8321,7 +8321,7 @@ Notes:
 ```
 </details></tool-use>
 
-_**Agent (claude-opus-4-7 2026-04-30 20:39:54Z)**_
+_**Agent (claude-opus-4-7 2026-04-30 20:39:55Z)**_
 
 <tool-use data-tool-type="shell" data-tool-name="Bash"><details>
 <summary>Tool use: **Bash**</summary>
@@ -8332,5 +8332,440 @@ echo "---one final smoke run to make sure I didn't break anything---" && /home/l
     -d /mnt/pikachu/bff-test/breakpoint_files \
     /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
     2>/dev/null | column -t -s $'\t' -o ' | ' | cut -c1-100
+```
+
+```text
+---one final smoke run to make sure I didn't break anything---
+cluster                       | side     | length | sequence
+chr15-74024222-chr17-40346374 | junction | 626    | TTGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACA
+chr15-74024223-chr17-40346371 | junction | 621    | TGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACAC
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:39:59Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:00Z)**_
+
+Both `-h` and `--help` work, the help block now includes a sectioned options list, an example, and notes. Smoke run still produces the right table.
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:07Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push annotated script + expanded help
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add bin/runFusionConsensus.sh .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Annotate runFusionConsensus.sh and expand --help
+
+- Section comments throughout (defaults, help, option parsing,
+  preflight, cleanup, input resolution, output staging, in-container
+  run, table emission). Trailing comments on every variable so the
+  flags and side-effects are obvious without reading the body.
+- --help is now accepted alongside -h (translated into -h before
+  getopts since getopts only handles short options).
+- Help block reorganized into Usage / Options / Output / Example /
+  Notes sections. Each option now describes its own default and
+  effect; the Example is a copy-pasteable run against the
+  cellranger reference.
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master 99e842d] Annotate runFusionConsensus.sh and expand --help
+ 3 files changed, 782 insertions(+), 53 deletions(-)
+To github.com:lhhunghimself/fast_fusion_finder.git
+   88a8d55..99e842d  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:10Z)**_
+
+Pushed as `99e842d`. `--help` (or `-h`) now lists all options with descriptions and defaults, has an example run against the cellranger reference, and a short Notes section. Inline section comments make the script easy to follow top-to-bottom: defaults → help → option parsing → preflight → cleanup → input resolution → output dir → docker run → table emission.
+
+---
+
+_**User (2026-04-30 20:40:46Z)**_
+
+Make sure that the README.md is up to date with examples. Commit and push if necessary
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:49Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:50Z)**_
+
+<tool-use data-tool-type="read" data-tool-name="Read"><details>
+<summary>Tool use: **Read**</summary>
+ `./README.md`
+
+```text
+1	# Fusion breakpoint consensus
+2	
+3	Build per-base consensus sequences over the supporting reads for every
+4	fusion breakpoint detected by the BFF pipeline. There are two output
+5	modes depending on what you want the consensus *for*:
+6	
+7	- **Per-side mpileup consensus** (`processBreakpointDir.sh`,
+8	  `breakpointPileup.pl`) — fast, reference-anchored, emits the two
+9	  halves of each fusion as **separate FASTA records** (5' partner, then
+10	  3' partner) windowed around the junction. Columns where a
+11	  non-reference base wins a strict majority are emitted in lowercase.
+12	  Good for variant inspection and quick QC.
+13	- **Polished chimeric consensus** (`polishFusionConsensus.sh`) — builds
+14	  a chimeric reference per fusion (5' window + 3' window in transcript
+15	  order), realigns the supporting reads to it with `minimap2 -ax map-ont`,
+16	  then polishes with `racon`. Output is a single continuous record
+17	  spanning the junction with indels resolved at the read level.
+18	  **Use this for primer design.**
+19	
+20	Entry points:
+21	
+22	- [`bin/runFusionConsensus.sh`](bin/runFusionConsensus.sh) — **top-level
+23	  driver. Build the Docker image lazily, run either pipeline inside it,
+24	  emit a TSV table.** Accepts either a directory of `*.nearby.sam` files
+25	  (`-d DIR`) or an explicit list of SAM paths. Use this when you just
+26	  want a sequence table.
+27	- [`bin/breakpointPileup.pl`](bin/breakpointPileup.pl) — the per-side
+28	  pileup core script. Consumes a read-names list, the original BAM, the
+29	  reference FASTA, and a breakpoint file; produces one FASTA record per
+30	  side and (optionally) a per-position TSV of base counts.
+31	- [`bin/processBreakpointDir.sh`](bin/processBreakpointDir.sh) — batch
+32	  wrapper around `breakpointPileup.pl` for a `breakpoint_files/`-style
+33	  directory. Two records per cluster, mpileup-derived.
+34	- [`bin/polishFusionConsensus.sh`](bin/polishFusionConsensus.sh) — the
+35	  chimeric-realign + racon-polish wrapper. One polished record per
+36	  cluster, primer-design-grade.
+37	
+38	## Layout
+39	
+40	```
+41	bin/
+42	├── breakpointPileup.pl        per-side mpileup core script
+43	├── processBreakpointDir.sh    batch wrapper around breakpointPileup.pl
+44	├── polishFusionConsensus.sh   chimeric-realign + racon polish wrapper
+45	├── extractReadsFasta.sh       names + FASTQ → FASTA
+46	├── filterEnds.pl              upstream: read-name filter
+47	└── ...
+48	breakpointPileup.pl            symlink → bin/breakpointPileup.pl
+49	tests/test_breakpointPileup.sh self-contained fixture test
+50	widgets/.../Dockerfiles/       copies that get baked into biodepot/bff:test
+51	```
+52	
+53	`breakpointPileup.pl` lives at `bin/breakpointPileup.pl`; the top-level
+54	file is a symlink for convenience. The Dockerfiles directory holds a
+55	build-context copy of each script (kept in sync manually).
+56	
+57	## Requirements
+58	
+59	There is nothing to compile.
+60	
+61	For the mpileup pipeline (`processBreakpointDir.sh`,
+62	`breakpointPileup.pl`):
+63	
+64	- `samtools` 1.12 or newer on `$PATH` (1.12 added `samtools view -N`,
+65	  the read-name filter the script depends on)
+66	- `perl` 5 with `Getopt::Long` and `File::Temp` (both core)
+67	- the reference FASTA must have a `.fai` (built lazily by the wrapper
+68	  when missing, but only if the directory is writable)
+69	
+70	For the polish pipeline (`polishFusionConsensus.sh`), additionally:
+71	
+72	- `minimap2` 2.x on `$PATH` (the `map-ont` preset is used)
+73	- `racon` 1.5+ on `$PATH`
+74	
+75	The `biodepot/bff:test` Docker image ships with all four — easiest way
+76	to get the polish pipeline running without touching your host.
+77	
+78	Verify:
+79	
+80	```bash
+81	samtools --version | head -1   # 1.12+
+82	perl -c bin/breakpointPileup.pl
+83	```
+84	
+85	## Quick start: the top-level driver
+86	
+87	For most users, `bin/runFusionConsensus.sh` is the only command needed.
+88	It builds `biodepot/bff:test` if it isn't there, mounts the inputs into
+89	the container, runs the chosen pipeline, and prints a tab-separated
+90	table of cluster sequences:
+91	
+92	```bash
+93	# Process every *.nearby.sam in a directory (polish mode, primer-grade):
+94	bin/runFusionConsensus.sh \
+95	    -d /path/to/breakpoint_files \
+96	    /path/to/genome.fa \
+97	    > consensus.tsv
+98	
+99	# Or hand it the SAM files directly (each .nearby.sam must have its
+100	# matching .nearby.readnamescoords next to it):
+101	bin/runFusionConsensus.sh \
+102	    /path/to/genome.fa \
+103	    /path/to/cluster1.nearby.sam /path/to/cluster2.nearby.sam \
+104	    > consensus.tsv
+105	
+106	# Per-side mpileup mode (variant-aware, two rows per cluster):
+107	bin/runFusionConsensus.sh -m pileup -w 100 \
+108	    -d /path/to/breakpoint_files \
+109	    /path/to/genome.fa \
+110	    > sides.tsv
+111	
+112	# Keep the per-cluster FASTAs around (default: dropped after table built):
+113	bin/runFusionConsensus.sh -D out/ -d /path/to/breakpoint_files \
+114	    /path/to/genome.fa  > consensus.tsv
+115	```
+116	
+117	Output columns: `cluster | side | length | sequence`. In polish mode
+118	`side` is always `junction`; in pileup mode it's `5p` and `3p` for the
+119	two halves.
+120	
+121	The driver only needs `docker` on the host. The image carries
+122	`samtools`, `perl`, `minimap2`, `racon`, and the wrapper scripts —
+123	nothing else has to be installed.
+124	
+125	## Three ways to run the underlying pipeline
+126	
+127	### 1. Container (zero host setup)
+128	
+129	The `biodepot/bff:test` image bundles `samtools`, `perl`, `minimap2`,
+130	`racon`, and the wrappers under `/usr/local/bin`.
+131	
+132	```bash
+133	# build once
+134	docker build -t biodepot/bff:test \
+135	    widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles
+136	
+137	# Mode A — fast per-side mpileup consensus (variant-aware, two records per cluster)
+138	docker run --rm -u "$(id -u):$(id -g)" \
+139	    -v /path/to/breakpoint_files:/in:ro \
+140	    -v /path/to/reference_dir:/ref:ro \
+141	    -v /path/to/output:/out \
+142	    biodepot/bff:test \
+143	    processBreakpointDir.sh /in /ref/genome.fa /out 100
+144	
+145	# Mode B — polished chimeric consensus for primer design (one record per cluster)
+146	docker run --rm -u "$(id -u):$(id -g)" \
+147	    -v /path/to/breakpoint_files:/in:ro \
+148	    -v /path/to/reference_dir:/ref:ro \
+149	    -v /path/to/output:/out \
+150	    biodepot/bff:test \
+151	    polishFusionConsensus.sh /in /ref/genome.fa /out 300
+152	```
+153	
+154	The `-u` flag makes the output files owned by your host user instead of
+155	root. The reference directory needs the `.fa.fai`; create it once on
+156	the host with `samtools faidx genome.fa` if it isn't there.
+157	
+158	### 2. Standalone
+159	
+160	If `samtools` and `perl` are on the host, just put the repo's `bin/`
+161	on `$PATH` (so the wrapper can find `breakpointPileup.pl`) and run:
+162	
+163	```bash
+164	PATH="$PWD/bin:$PATH" \
+165	bin/processBreakpointDir.sh \
+166	    /path/to/breakpoint_files \
+167	    /path/to/genome.fa \
+168	    /path/to/output \
+169	    100
+170	```
+171	
+172	### 3. As part of the BFF widget pipeline
+173	
+174	`runBFF.sh` (the widget entrypoint) calls `breakpointPileup.pl`
+175	automatically when both `$BAM` and `$REFERENCE` are set:
+176	
+177	```bash
+178	WINDOW=100 \
+179	pileup=/data/fusion.fa \
+180	pileupTable=/data/variants.tsv \
+181	filterends=/data/reads.txt \
+182	BAM=/data/all.sorted.bam REFERENCE=/data/genome.fa \
+183	runBFF.sh --first first.bam --last last.bam -b breakpoints.txt
+184	```
+185	
+186	If `$BAM` or `$REFERENCE` is empty the pileup step is skipped and
+187	`runBFF.sh` runs `filterEnds.pl` alone, matching the legacy behaviour.
+188	
+189	## Inputs
+190	
+191	### For `processBreakpointDir.sh`
+192	
+193	| Path | Purpose |
+194	|------|---------|
+195	| `INPUT_DIR` | A `breakpoint_files/`-style directory with `*.nearby.sam` (alignment dump, no `@HD`/`@SQ`) and matching `*.nearby.readnamescoords`. |
+196	| `REFERENCE_FASTA` | The genome FASTA used for alignment. Needs a `.fai`. |
+197	| `OUTPUT_DIR` | Created if missing. One `<name>.fa` and one `<name>.tsv` per cluster. |
+198	| `WINDOW` | Optional half-window size in bp (default `100`). Each side gets `WINDOW` bases on the transcript-internal flank of the breakpoint. |
+199	
+200	The wrapper auto-detects UCSC vs Ensembl contig naming. If the SAM uses
+201	`chr15`-style names but the reference doesn't, `chr` is stripped on the
+202	fly from `RNAME`, `RNEXT`, and the breakpoint encoding before mpileup.
+203	
+204	### For `polishFusionConsensus.sh`
+205	
+206	Same arguments as above, but the default `WINDOW` is **300** because
+207	minimap2 needs a longer chimeric contig to anchor reads cleanly. Per
+208	cluster the wrapper:
+209	
+210	1. Builds a chimeric reference by extracting `WINDOW` bases of the 5'
+211	   partner ending at the breakpoint and `WINDOW` bases of the 3'
+212	   partner starting at the breakpoint (RC where the breakpoint encoding
+213	   says `-`), concatenated as one record.
+214	2. Pulls the cluster's supporting reads' sequences from the SAM via
+215	   `samtools fasta` (in their original orientation, FLAG-aware).
+216	3. Realigns those reads to the chimeric ref with
+217	   `minimap2 -ax map-ont --secondary=no`.
+218	4. Polishes with `racon`, writing one FASTA record per cluster to
+219	   `OUTPUT_DIR/<name>.fa`. Racon's header carries `RC:i:<n>`
+220	   (read coverage) and `XC:f:<frac>` (corrected coverage).
+221	
+222	Edge cases:
+223	
+224	- **Very low depth** (e.g., 2-read clusters): racon still runs but
+225	  the polish is fundamentally limited by what 2 reads can correct.
+226	  Output is technically valid but expect residual nanopore errors.
+227	- **Racon fails outright** (no overlaps): the wrapper falls back to
+228	  the unpolished chimeric draft and prints a warning. Reported in the
+229	  end-of-run summary as `fallback_to_draft=N`.
+230	- **Lowercase variants**: racon discards case, so its output is plain
+231	  uppercase. Use the mpileup pipeline if you need the variant
+232	  annotation.
+233	
+234	### For `breakpointPileup.pl`
+235	
+236	| Flag | Required | Notes |
+237	|------|----------|-------|
+238	| `--reads reads.txt` | yes | Newline-separated read names — typically the stdout of `filterEnds.pl`. |
+239	| `--bam in.bam` | yes | Coordinate-sorted and indexed. |
+240	| `--ref ref.fa` | yes | With matching `.fai`. |
+241	| `-b breakpoints.txt` | yes | One fusion per line: `chr:start:end;chr:start:end`. Strand encoded by coord order — `start<end` is `+`, `start>end` is `-`. Lines starting with `#` are ignored. |
+242	| `--window N` | no, default 100 | bp per side. |
+243	| `--pileupOut path` | no | Write a per-position TSV (chr, pos, ref, consensus, depth, A, C, G, T) alongside stdout. |
+244	| `--threshold F` | no, default 0.5 | Strict majority needed to call a non-reference base. |
+245	| `--minDepth D` | no, default 1 | Columns below this depth fall back to the reference. |
+246	| `--guideFile guides.txt` (`-G`) | no | `group<TAB>chr:pos<TAB>+/-`. Overrides the breakpoint-file's encoded strand and groups output by guide name. |
+247	
+248	## Output
+249	
+250	For each non-comment line of the breakpoint file, two FASTA records
+251	are written to stdout (or to a file if you redirect):
+252	
+253	```
+254	>15:74024123-74024222+ length=100
+255	GAGAGTCTCCAGGAGTCTTTGACTAAATCTCCAAGCTGGAATGTGAGCTCTGAGCAGCTAGTATAGGATGCCCTTACTGG
+256	GAAAGGGGAGGGAGGCTATG
+257	>17:40346374-40346473+ length=100
+258	GAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCAGTGCCTTCTTCCTCTGCTTGTCGGAATGCT
+259	GACCAAGATTCTAGGCCATG
+260	```
+261	
+262	Headers are `<region><strand> length=<N>`; sides are emitted 5' first
+263	then 3', in the order they appear on the breakpoint line.
+264	Lowercase letters mark columns where a non-reference base won
+265	`> --threshold` of the parsed reads. The strand annotation in the
+266	header reflects what was decoded from the breakpoint file's coord
+267	order (or, with `--guideFile`, the guide direction).
+268	
+269	When `--pileupOut` is set, the companion TSV has one row per pileup
+270	column **in genomic order** (so for `-` strand sides the row order
+271	is the reverse of the FASTA letter order):
+272	
+273	```
+274	#chr   pos    ref  consensus  depth  A  C  G  T
+275	15     74024124  G  G   2  0  0  2  0
+276	15     74024125  A  a   8  0  0  6  2
+277	...
+278	```
+279	
+280	## Conventions worth knowing
+281	
+282	- **Strand from coord order.** The upstream BFF generator emits each
+283	  side with `start<end` for `+` and `start>end` for `-`. The script
+284	  trusts that encoding — no fallback to BAM FLAGs. If you supply your
+285	  own breakpoint file, follow the same convention or use `--guideFile`.
+286	- **Breakpoint position per side.** Side 1 (5' partner) → second coord
+287	  of the encoded `chr:start:end`. Side 2 (3' partner) → first coord.
+288	  This matches what `findBreakPoints` in `filterEnds.pl` writes.
+289	- **Window placement.** `5'+` and `3'-` use `[bp-W+1, bp]`; `5'-` and
+290	  `3'+` use `[bp, bp+W-1]`. So each FASTA record is `W` bases of the
+291	  partner gene's transcript-side flank ending at (or starting at) the
+292	  junction.
+293	- **Variant case.** Lowercase = non-reference call. Reverse complement
+294	  preserves case (`tr/ACGTNacgtn/TGCANtgcan/`).
+295	
+296	## Smoke test
+297	
+298	`tests/test_breakpointPileup.sh` builds a synthetic chr1/chr2 reference
+299	and ten reads, then exercises forward+forward, narrow window,
+300	forward+reverse with RC variants, and zero-coverage fallback:
+301	
+302	```bash
+303	bash tests/test_breakpointPileup.sh
+304	```
+305	
+306	All assertions should pass. The same suite runs unmodified inside the
+307	container against `/usr/local/bin/breakpointPileup.pl`.
+308
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:57Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:40:58Z)**_
+
+A few gaps: the Layout block doesn't list `runFusionConsensus.sh`, the Quick Start doesn't mention `--help`, and there's no concrete example showing what the table actually looks like. Let me patch those.
+
+_**Agent (claude-opus-4-7 2026-04-30 20:41:06Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:41:34Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:41:38Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Check README change size and section list
+
+`git -C /home/lhhung/fast_fusion_finder diff --stat README.md && echo "---preview---" && grep -n "^##\|^###" /home/lhhung/fast_fusion_finder/README.md | head -20`
+
+```text
+ README.md | 65 ++++++++++++++++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 54 insertions(+), 11 deletions(-)
+---preview---
+38:## Layout
+58:## Requirements
+86:## Quick start: the top-level driver
+98:### Common usages
+130:### Worked example (the `bff-test` fixtures)
+155:### Output columns
+168:## Three ways to run the underlying pipeline
+170:### 1. Container (zero host setup)
+201:### 2. Standalone
+215:### 3. As part of the BFF widget pipeline
+232:## Inputs
+234:### For `processBreakpointDir.sh`
+247:### For `polishFusionConsensus.sh`
+277:### For `breakpointPileup.pl`
+291:## Output
+323:## Conventions worth knowing
+339:## Smoke test
 ```
 </details></tool-use>

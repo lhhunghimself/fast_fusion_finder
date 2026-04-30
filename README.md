@@ -39,6 +39,7 @@ Entry points:
 
 ```
 bin/
+├── runFusionConsensus.sh      top-level driver (docker, builds image lazily)
 ├── breakpointPileup.pl        per-side mpileup core script
 ├── processBreakpointDir.sh    batch wrapper around breakpointPileup.pl
 ├── polishFusionConsensus.sh   chimeric-realign + racon polish wrapper
@@ -87,36 +88,78 @@ perl -c bin/breakpointPileup.pl
 For most users, `bin/runFusionConsensus.sh` is the only command needed.
 It builds `biodepot/bff:test` if it isn't there, mounts the inputs into
 the container, runs the chosen pipeline, and prints a tab-separated
-table of cluster sequences:
+table of cluster sequences. Run with `-h` (or `--help`) to see all
+flags and a copy-pasteable example:
 
 ```bash
-# Process every *.nearby.sam in a directory (polish mode, primer-grade):
+bin/runFusionConsensus.sh --help
+```
+
+### Common usages
+
+```bash
+# 1. Polish every *.nearby.sam in a breakpoint_files-style directory.
+#    Default mode; one primer-grade row per cluster.
 bin/runFusionConsensus.sh \
     -d /path/to/breakpoint_files \
     /path/to/genome.fa \
     > consensus.tsv
 
-# Or hand it the SAM files directly (each .nearby.sam must have its
-# matching .nearby.readnamescoords next to it):
+# 2. Pass SAM files directly (each .nearby.sam must have its
+#    matching .nearby.readnamescoords next to it).
 bin/runFusionConsensus.sh \
     /path/to/genome.fa \
     /path/to/cluster1.nearby.sam /path/to/cluster2.nearby.sam \
     > consensus.tsv
 
-# Per-side mpileup mode (variant-aware, two rows per cluster):
+# 3. Per-side mpileup mode for variant inspection
+#    (two rows per cluster, lowercase = non-reference call).
 bin/runFusionConsensus.sh -m pileup -w 100 \
     -d /path/to/breakpoint_files \
     /path/to/genome.fa \
     > sides.tsv
 
-# Keep the per-cluster FASTAs around (default: dropped after table built):
-bin/runFusionConsensus.sh -D out/ -d /path/to/breakpoint_files \
-    /path/to/genome.fa  > consensus.tsv
+# 4. Keep the per-cluster FASTAs around (default: dropped after the
+#    table is built). Useful when you want the .fa / .tsv files too.
+bin/runFusionConsensus.sh -D out/ \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    > consensus.tsv
 ```
 
-Output columns: `cluster | side | length | sequence`. In polish mode
-`side` is always `junction`; in pileup mode it's `5p` and `3p` for the
-two halves.
+### Worked example (the `bff-test` fixtures)
+
+Against the two 2-read clusters in
+`/mnt/pikachu/bff-test/breakpoint_files` and the cellranger Ensembl
+FASTA:
+
+```bash
+bin/runFusionConsensus.sh \
+    -d /mnt/pikachu/bff-test/breakpoint_files \
+    -o consensus.tsv \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+```
+
+`consensus.tsv`:
+
+```
+cluster                          side      length  sequence
+chr15-74024222-chr17-40346374    junction  626     TTGCGCGCCCTGCCTGAGTGTTGGAC...
+chr15-74024223-chr17-40346371    junction  621     TGCGCGCCCTGCCTGAGTGTTGGACG...
+```
+
+Add `-m pileup -w 50` to the same command to get four rows instead
+(5' and 3' for each cluster, with lowercase variants where they
+appear).
+
+### Output columns
+
+| Column | Meaning |
+|--------|---------|
+| `cluster` | Cluster name, parsed from the source filename (`chrA-posA-chrB-posB`). |
+| `side` | `junction` in polish mode; `5p` / `3p` in pileup mode. |
+| `length` | Sequence length in bp. |
+| `sequence` | The consensus, on a single line. Lowercase letters in pileup mode mark non-reference consensus calls; polish mode is plain uppercase. |
 
 The driver only needs `docker` on the host. The image carries
 `samtools`, `perl`, `minimap2`, `racon`, and the wrapper scripts —
