@@ -7238,3 +7238,454 @@ Untracked files:
 no changes added to commit (use "git add" and/or "git commit -a")
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 04:17:51Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push polish pipeline
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add bin/polishFusionConsensus.sh widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/polishFusionConsensus.sh widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/Dockerfile README.md .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+Add polishFusionConsensus.sh: chimeric realign + racon polish
+
+For primer-design-grade junction sequences, an mpileup against the
+genome is the wrong primitive on noisy long reads — pileup-style
+consensus doesn't denoise indels well at low depth, and bases right at
+the junction tend to be soft-clipped in the genome alignment.
+
+bin/polishFusionConsensus.sh
+- Per cluster in a breakpoint_files/-style directory:
+    1. extract a chimeric reference (5' window + 3' window in transcript
+       order, RC where the breakpoint encoding says -) from the genome
+       FASTA via samtools faidx;
+    2. pull supporting reads' sequences from the cluster SAM with
+       samtools fasta (FLAG-aware, in their original orientation);
+    3. realign them to the chimeric ref with minimap2 -ax map-ont
+       --secondary=no;
+    4. polish with racon, falling back to the unpolished draft when
+       racon refuses (zero-overlap edge cases).
+- Default WINDOW=300 (vs 100 for the pileup wrapper) because minimap2
+  needs a longer chimeric contig to anchor noisy reads.
+- Same chr-prefix auto-detection and filename-canonical bp lookup as
+  processBreakpointDir.sh.
+
+Dockerfile
+- Multi-stage builds for minimap2 2.24 and racon 1.5.0 alongside the
+  existing samtools build. Final image grows from 46.5 MB to ~48.8 MB.
+- libstdc++/libgcc added to the runtime layer for racon (C++).
+- ADD line for the new wrapper.
+
+Smoke-tested on the existing 2-read clusters in
+/mnt/pikachu/bff-test/breakpoint_files: both clusters polish cleanly
+producing one ~620-bp record per cluster (RC:i:2 XC:f:1.0). At 2 reads
+the polish is depth-limited but the pipeline runs end-to-end.
+
+README updated to document the polish wrapper, its use case (primer
+design), the racon edge cases, and the lowercase-variant tradeoff
+(racon emits plain uppercase; use the mpileup pipeline when you need
+variant annotation).
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master 4d0e769] Add polishFusionConsensus.sh: chimeric realign + racon polish
+ 6 files changed, 1458 insertions(+), 34 deletions(-)
+ create mode 100755 bin/polishFusionConsensus.sh
+ create mode 100755 widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles/polishFusionConsensus.sh
+To github.com:lhhunghimself/fast_fusion_finder.git
+   4b18144..4d0e769  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 04:17:56Z)**_
+
+Pushed as `4d0e769`. Six files (+1458/-34): new wrapper, Dockerfiles copy, Dockerfile multi-stage builds for minimap2/racon, README expansion. `biodepot/bff:test` rebuilt locally; push to Docker Hub when you want to share. Smoke test on the 2-read clusters passes end-to-end (`processed=2 skipped=0 fallback_to_draft=0`).
+
+---
+
+_**User (2026-04-30 20:33:59Z)**_
+
+OK how do I use this - can you write a shell script - building the docker container if necessary to run it. Can you have a version take a set of sam files or search a directory for nearby samfiles and return a table of sequences.
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-30 20:35:54Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:35:56Z)**_
+
+Top-level driver script that wraps it all up. I'll make it default to polish mode (best for primer design), accept either `-d DIR` or a list of `*.nearby.sam` paths, build the image lazily, and emit a TSV table.
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:22Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Write"><details>
+<summary>Tool use: **Write**</summary>
+
+```sh
+#!/usr/bin/env bash
+# runFusionConsensus.sh
+#
+# Host-side driver. Builds biodepot/bff:test if it isn't already present,
+# then runs either the polish (default) or the per-side pileup pipeline
+# inside the container, and emits a TSV table of consensus sequences to
+# stdout (or a file via -o).
+#
+# Two input modes:
+#   -d INPUT_DIR        process every *.nearby.sam in INPUT_DIR
+#   SAM [SAM ...]       process the given *.nearby.sam files explicitly
+#                       (each must have its matching *.nearby.readnamescoords
+#                        file alongside it)
+#
+# Output table (tab-separated):
+#   cluster    side     length    sequence
+# - polish mode: side = "junction", one row per cluster (chimeric +
+#   racon, primer-design grade).
+# - pileup mode: side = "5p" or "3p", two rows per cluster
+#   (per-side mpileup consensus, lowercase variants preserved).
+#
+# Usage:
+#   runFusionConsensus.sh [opts] -d INPUT_DIR REFERENCE.fa
+#   runFusionConsensus.sh [opts]    REFERENCE.fa SAM [SAM ...]
+#
+# Options:
+#   -m polish|pileup   pipeline (default: polish)
+#   -w N               window size (default 300 polish / 100 pileup)
+#   -o PATH            write TSV to PATH instead of stdout
+#   -D DIR             keep the per-cluster FASTAs (and pileup TSVs) in
+#                      DIR after the run; DIR is created if missing.
+#                      Default: per-cluster artefacts are dropped.
+#   -i IMAGE           override the docker image tag (default biodepot/bff:test)
+#   -h                 this help
+
+set -euo pipefail
+
+MODE=polish
+WINDOW=
+OUT=-
+SEARCH_DIR=
+KEEP_DIR=
+IMAGE=biodepot/bff:test
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DOCKERFILES_DIR="$SCRIPT_DIR/../widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles"
+
+usage() {
+    sed -n '/^# Usage:/,/^# Options:/p; /^#   -[A-Za-z]/p' "${BASH_SOURCE[0]}" \
+        | sed 's/^# \{0,2\}//' >&2
+    exit "${1:-1}"
+}
+
+while getopts "m:w:o:d:D:i:h" opt; do
+    case "$opt" in
+        m) MODE=$OPTARG;;
+        w) WINDOW=$OPTARG;;
+        o) OUT=$OPTARG;;
+        d) SEARCH_DIR=$OPTARG;;
+        D) KEEP_DIR=$OPTARG;;
+        i) IMAGE=$OPTARG;;
+        h) usage 0;;
+        *) usage;;
+    esac
+done
+shift $((OPTIND - 1))
+
+case "$MODE" in
+    polish) WRAPPER=polishFusionConsensus.sh; WINDOW=${WINDOW:-300};;
+    pileup) WRAPPER=processBreakpointDir.sh;  WINDOW=${WINDOW:-100};;
+    *) echo "unknown mode: $MODE (use polish or pileup)" >&2; exit 1;;
+esac
+
+command -v docker >/dev/null 2>&1 \
+    || { echo "docker not found on PATH" >&2; exit 1; }
+
+# Build the image if missing (and possible).
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    if [[ -d "$DOCKERFILES_DIR" ]]; then
+        echo "image $IMAGE not found, building from $DOCKERFILES_DIR ..." >&2
+        docker build -t "$IMAGE" "$DOCKERFILES_DIR" >&2
+    else
+        echo "image $IMAGE not found and Dockerfile dir not at $DOCKERFILES_DIR" >&2
+        echo "build the image first:" >&2
+        echo "  docker build -t $IMAGE <path-to-Dockerfiles>" >&2
+        exit 1
+    fi
+fi
+
+# Cleanup tracking
+cleanup_dirs=()
+cleanup() {
+    local d
+    for d in "${cleanup_dirs[@]+"${cleanup_dirs[@]}"}"; do
+        [[ -n "$d" && -d "$d" ]] && rm -rf "$d"
+    done
+}
+trap cleanup EXIT
+
+# Resolve input source.
+if [[ -n "$SEARCH_DIR" ]]; then
+    [[ $# -lt 1 ]] && usage
+    REF=$1; shift
+    [[ $# -gt 0 ]] && { echo "extra args after reference: $*" >&2; usage; }
+    [[ -d "$SEARCH_DIR" ]] || { echo "directory not found: $SEARCH_DIR" >&2; exit 1; }
+    INPUT_DIR=$(realpath "$SEARCH_DIR")
+else
+    [[ $# -lt 2 ]] && usage
+    REF=$1; shift
+    INPUT_DIR=$(mktemp -d)
+    cleanup_dirs+=("$INPUT_DIR")
+    for sam in "$@"; do
+        [[ -f "$sam" ]] || { echo "sam not found: $sam" >&2; exit 1; }
+        sam=$(realpath "$sam")
+        base=$(basename "$sam" .nearby.sam)
+        if [[ "$(basename "$sam")" == "$base" ]]; then
+            echo "expected *.nearby.sam, got: $sam" >&2; exit 1
+        fi
+        coords="$(dirname "$sam")/${base}.nearby.readnamescoords"
+        [[ -f "$coords" ]] \
+            || { echo "missing $coords (expected next to $sam)" >&2; exit 1; }
+        # Hardlink first (fast, same FS); fall back to copy across FSes.
+        ln "$sam"    "$INPUT_DIR/${base}.nearby.sam"               2>/dev/null \
+            || cp "$sam"    "$INPUT_DIR/${base}.nearby.sam"
+        ln "$coords" "$INPUT_DIR/${base}.nearby.readnamescoords"   2>/dev/null \
+            || cp "$coords" "$INPUT_DIR/${base}.nearby.readnamescoords"
+    done
+fi
+[[ -f "$REF" ]] || { echo "reference not found: $REF" >&2; exit 1; }
+REF=$(realpath "$REF")
+REF_DIR=$(dirname "$REF")
+REF_NAME=$(basename "$REF")
+
+# Per-cluster output dir (kept on -D, otherwise scratch).
+if [[ -n "$KEEP_DIR" ]]; then
+    mkdir -p "$KEEP_DIR"
+    OUT_DIR=$(realpath "$KEEP_DIR")
+else
+    OUT_DIR=$(mktemp -d)
+    cleanup_dirs+=("$OUT_DIR")
+fi
+
+# Run inside the container. All wrapper progress lines go to stderr so
+# stdout stays clean for the table.
+docker run --rm \
+    -u "$(id -u):$(id -g)" \
+    -v "$INPUT_DIR:/in:ro" \
+    -v "$REF_DIR:/ref:ro" \
+    -v "$OUT_DIR:/out" \
+    "$IMAGE" \
+    "$WRAPPER" /in "/ref/$REF_NAME" /out "$WINDOW" >&2
+
+# Emit the TSV table.
+[[ "$OUT" == "-" ]] && OUT=/dev/stdout
+{
+    printf 'cluster\tside\tlength\tsequence\n'
+    shopt -s nullglob
+    for fa in "$OUT_DIR"/*.fa; do
+        base=$(basename "$fa" .fa)
+        awk -v cluster="$base" -v mode="$MODE" '
+            BEGIN { rec = 0; seq = ""; have = 0 }
+            function emit() {
+                side = (mode == "polish") ? "junction" : (rec == 1 ? "5p" : "3p")
+                printf "%s\t%s\t%d\t%s\n", cluster, side, length(seq), seq
+            }
+            /^>/ {
+                if (have) emit()
+                have = 1; rec++; seq = ""
+                next
+            }
+            { seq = seq $0 }
+            END { if (have) emit() }
+        ' "$fa"
+    done
+} > "$OUT"
+
+```
+
+```text
+File created successfully at: /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:25Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Syntax-check the driver script
+
+`chmod +x /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh && bash -n /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh && echo "syntax ok"`
+
+```text
+syntax ok
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:28Z)**_
+
+Now exercise it both ways — directory mode and explicit-files mode:
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:40Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Run all three modes against the test data
+
+```bash
+echo "=== mode 1: directory search, polish ===" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh \
+    -d /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    | column -t -s $'\t' -o ' | ' | cut -c1-120
+echo
+echo "=== mode 2: explicit SAM files, polish ==="
+/home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    /mnt/pikachu/bff-test/breakpoint_files/chr15-74024222-chr17-40346374.nearby.sam \
+    | column -t -s $'\t' -o ' | ' | cut -c1-120
+echo
+echo "=== mode 3: directory, pileup (per-side) ==="
+/home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh -m pileup -w 50 \
+    -d /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    | column -t -s $'\t' -o ' | ' | cut -c1-120
+```
+
+```text
+=== mode 1: directory search, polish ===
+ok: chr15-74024222-chr17-40346374 -> /out/chr15-74024222-chr17-40346374.fa (polished)
+ok: chr15-74024223-chr17-40346371 -> /out/chr15-74024223-chr17-40346371.fa (polished)
+processed=2 skipped=0 fallback_to_draft=0 output=/out
+cluster                       | side     | length | sequence
+chr15-74024222-chr17-40346374 | junction | 626    | TTGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACACAGACTAGTTTCTGATCTCA
+chr15-74024223-chr17-40346371 | junction | 621    | TGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACACAGACTAGTTTCTGATCTCAA
+
+=== mode 2: explicit SAM files, polish ===
+ok: chr15-74024222-chr17-40346374 -> /out/chr15-74024222-chr17-40346374.fa (polished)
+processed=1 skipped=0 fallback_to_draft=0 output=/out
+cluster                       | side     | length | sequence
+chr15-74024222-chr17-40346374 | junction | 626    | TTGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACACAGACTAGTTTCTGATCTCA
+
+=== mode 3: directory, pileup (per-side) ===
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+ok: chr15-74024222-chr17-40346374 -> /out/chr15-74024222-chr17-40346374.fa, /out/chr15-74024222-chr17-40346374.tsv
+[mpileup] 1 samples in 1 input files
+[mpileup] 1 samples in 1 input files
+ok: chr15-74024223-chr17-40346371 -> /out/chr15-74024223-chr17-40346371.fa, /out/chr15-74024223-chr17-40346371.tsv
+processed=2 skipped=0 output=/out
+cluster                       | side | length | sequence
+chr15-74024222-chr17-40346374 | 5p   | 50     | TGAGCAGCTAGTATAGGATGCCCTTACTGGGAAAGGGGAGGGAGGCTATG
+chr15-74024222-chr17-40346374 | 3p   | 50     | GAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGGTCA
+chr15-74024223-chr17-40346371 | 5p   | 50     | GAGCAGCTAGTATAGGATGCCCTTACTGGGAAAGGGGAGGGAGGCTATGG
+chr15-74024223-chr17-40346371 | 3p   | 50     | TGGGAGAGGCGGGGCCCAGGGCAAACGGTGGATTAGGAGGGGTGGGGAGG
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:49Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:50Z)**_
+
+All three modes work end-to-end. Let me also verify the help, add it to the README, and commit.
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:51Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify -h output
+
+`/home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh -h 2>&1 | head -20`
+
+```text
+ -d INPUT_DIR        process every *.nearby.sam in INPUT_DIR
+Usage:
+ runFusionConsensus.sh [opts] -d INPUT_DIR REFERENCE.fa
+ runFusionConsensus.sh [opts]    REFERENCE.fa SAM [SAM ...]
+
+Options:
+ -m polish|pileup   pipeline (default: polish)
+ -w N               window size (default 300 polish / 100 pileup)
+ -o PATH            write TSV to PATH instead of stdout
+ -D DIR             keep the per-cluster FASTAs (and pileup TSVs) in
+ -i IMAGE           override the docker image tag (default biodepot/bff:test)
+ -h                 this help
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:54Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:54Z)**_
+
+The help output is jumbled (the sed extracts in two passes). Let me fix that with a plain heredoc:
+
+_**Agent (claude-opus-4-7 2026-04-30 20:36:59Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:37:02Z)**_
+
+Now update the README to document the driver:
+
+_**Agent (claude-opus-4-7 2026-04-30 20:37:12Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:37:25Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/README.md has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:37:28Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Status check + final help verification
+
+`git -C /home/lhhung/fast_fusion_finder status && echo "---verify driver runs once more---" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh -h 2>&1 | head -15`
+
+```text
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .specstory/history/2026-04-28_07-52-15Z-look-at-filterends-pl.md
+	modified:   .specstory/statistics.json
+	modified:   README.md
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.vscode/
+	bin/runFusionConsensus.sh
+
+no changes added to commit (use "git add" and/or "git commit -a")
+---verify driver runs once more---
+Usage:
+  runFusionConsensus.sh [opts] -d INPUT_DIR REFERENCE.fa
+  runFusionConsensus.sh [opts]    REFERENCE.fa SAM [SAM ...]
+
+Options:
+  -m polish|pileup   pipeline (default: polish)
+  -w N               window size (default 300 polish / 100 pileup)
+  -o PATH            write TSV to PATH instead of stdout
+  -D DIR             keep per-cluster FASTAs (and pileup TSVs) in DIR
+  -d DIR             use every *.nearby.sam in DIR
+  -i IMAGE           docker image tag (default biodepot/bff:test)
+  -h                 show this help
+```
+</details></tool-use>

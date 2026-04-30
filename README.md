@@ -17,8 +17,13 @@ modes depending on what you want the consensus *for*:
   spanning the junction with indels resolved at the read level.
   **Use this for primer design.**
 
-Three entry points:
+Entry points:
 
+- [`bin/runFusionConsensus.sh`](bin/runFusionConsensus.sh) — **top-level
+  driver. Build the Docker image lazily, run either pipeline inside it,
+  emit a TSV table.** Accepts either a directory of `*.nearby.sam` files
+  (`-d DIR`) or an explicit list of SAM paths. Use this when you just
+  want a sequence table.
 - [`bin/breakpointPileup.pl`](bin/breakpointPileup.pl) — the per-side
   pileup core script. Consumes a read-names list, the original BAM, the
   reference FASTA, and a breakpoint file; produces one FASTA record per
@@ -77,7 +82,47 @@ samtools --version | head -1   # 1.12+
 perl -c bin/breakpointPileup.pl
 ```
 
-## Three ways to run
+## Quick start: the top-level driver
+
+For most users, `bin/runFusionConsensus.sh` is the only command needed.
+It builds `biodepot/bff:test` if it isn't there, mounts the inputs into
+the container, runs the chosen pipeline, and prints a tab-separated
+table of cluster sequences:
+
+```bash
+# Process every *.nearby.sam in a directory (polish mode, primer-grade):
+bin/runFusionConsensus.sh \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    > consensus.tsv
+
+# Or hand it the SAM files directly (each .nearby.sam must have its
+# matching .nearby.readnamescoords next to it):
+bin/runFusionConsensus.sh \
+    /path/to/genome.fa \
+    /path/to/cluster1.nearby.sam /path/to/cluster2.nearby.sam \
+    > consensus.tsv
+
+# Per-side mpileup mode (variant-aware, two rows per cluster):
+bin/runFusionConsensus.sh -m pileup -w 100 \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    > sides.tsv
+
+# Keep the per-cluster FASTAs around (default: dropped after table built):
+bin/runFusionConsensus.sh -D out/ -d /path/to/breakpoint_files \
+    /path/to/genome.fa  > consensus.tsv
+```
+
+Output columns: `cluster | side | length | sequence`. In polish mode
+`side` is always `junction`; in pileup mode it's `5p` and `3p` for the
+two halves.
+
+The driver only needs `docker` on the host. The image carries
+`samtools`, `perl`, `minimap2`, `racon`, and the wrapper scripts —
+nothing else has to be installed.
+
+## Three ways to run the underlying pipeline
 
 ### 1. Container (zero host setup)
 
