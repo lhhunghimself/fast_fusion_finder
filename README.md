@@ -1,35 +1,48 @@
 # Fusion breakpoint consensus
 
 Build per-base consensus sequences over the supporting reads for every
-fusion breakpoint detected by the BFF pipeline. The two halves of each
-fusion are emitted as **separate FASTA records** (5' partner, then 3'
-partner), windowed around the junction; columns where a non-reference
-base wins a strict majority of the reads are emitted in lowercase.
+fusion breakpoint detected by the BFF pipeline. There are two output
+modes depending on what you want the consensus *for*:
 
-Two entry points:
+- **Per-side mpileup consensus** (`processBreakpointDir.sh`,
+  `breakpointPileup.pl`) — fast, reference-anchored, emits the two
+  halves of each fusion as **separate FASTA records** (5' partner, then
+  3' partner) windowed around the junction. Columns where a
+  non-reference base wins a strict majority are emitted in lowercase.
+  Good for variant inspection and quick QC.
+- **Polished chimeric consensus** (`polishFusionConsensus.sh`) — builds
+  a chimeric reference per fusion (5' window + 3' window in transcript
+  order), realigns the supporting reads to it with `minimap2 -ax map-ont`,
+  then polishes with `racon`. Output is a single continuous record
+  spanning the junction with indels resolved at the read level.
+  **Use this for primer design.**
 
-- [`bin/breakpointPileup.pl`](bin/breakpointPileup.pl) — the core script.
-  Consumes a read-names list, the original BAM, the reference FASTA, and
-  a breakpoint file; produces one FASTA record per side and (optionally)
-  a per-position TSV of base counts. Use this when you already have
-  those four pieces.
+Three entry points:
+
+- [`bin/breakpointPileup.pl`](bin/breakpointPileup.pl) — the per-side
+  pileup core script. Consumes a read-names list, the original BAM, the
+  reference FASTA, and a breakpoint file; produces one FASTA record per
+  side and (optionally) a per-position TSV of base counts.
 - [`bin/processBreakpointDir.sh`](bin/processBreakpointDir.sh) — batch
-  wrapper for a `breakpoint_files/`-style directory. For each cluster it
-  rebuilds the SAM into a sorted BAM, derives the reads list and the
-  breakpoint encoding from `*.nearby.readnamescoords`, and runs the core
-  script. Use this when you have BFF cluster output and a reference.
+  wrapper around `breakpointPileup.pl` for a `breakpoint_files/`-style
+  directory. Two records per cluster, mpileup-derived.
+- [`bin/polishFusionConsensus.sh`](bin/polishFusionConsensus.sh) — the
+  chimeric-realign + racon-polish wrapper. One polished record per
+  cluster, primer-design-grade.
 
 ## Layout
 
 ```
 bin/
-├── breakpointPileup.pl       canonical script
-├── processBreakpointDir.sh   batch wrapper
-├── filterEnds.pl             upstream: read-name filter
+├── breakpointPileup.pl        per-side mpileup core script
+├── processBreakpointDir.sh    batch wrapper around breakpointPileup.pl
+├── polishFusionConsensus.sh   chimeric-realign + racon polish wrapper
+├── extractReadsFasta.sh       names + FASTQ → FASTA
+├── filterEnds.pl              upstream: read-name filter
 └── ...
-breakpointPileup.pl           symlink → bin/breakpointPileup.pl
-tests/test_breakpointPileup.sh   self-contained fixture test
-widgets/.../Dockerfiles/      copies that get baked into biodepot/bff:test
+breakpointPileup.pl            symlink → bin/breakpointPileup.pl
+tests/test_breakpointPileup.sh self-contained fixture test
+widgets/.../Dockerfiles/       copies that get baked into biodepot/bff:test
 ```
 
 `breakpointPileup.pl` lives at `bin/breakpointPileup.pl`; the top-level
@@ -40,11 +53,22 @@ build-context copy of each script (kept in sync manually).
 
 There is nothing to compile.
 
+For the mpileup pipeline (`processBreakpointDir.sh`,
+`breakpointPileup.pl`):
+
 - `samtools` 1.12 or newer on `$PATH` (1.12 added `samtools view -N`,
   the read-name filter the script depends on)
 - `perl` 5 with `Getopt::Long` and `File::Temp` (both core)
 - the reference FASTA must have a `.fai` (built lazily by the wrapper
   when missing, but only if the directory is writable)
+
+For the polish pipeline (`polishFusionConsensus.sh`), additionally:
+
+- `minimap2` 2.x on `$PATH` (the `map-ont` preset is used)
+- `racon` 1.5+ on `$PATH`
+
+The `biodepot/bff:test` Docker image ships with all four — easiest way
+to get the polish pipeline running without touching your host.
 
 Verify:
 
@@ -57,22 +81,29 @@ perl -c bin/breakpointPileup.pl
 
 ### 1. Container (zero host setup)
 
-The `biodepot/bff:test` image bundles `samtools`, `perl`, and both
-scripts under `/usr/local/bin`.
+The `biodepot/bff:test` image bundles `samtools`, `perl`, `minimap2`,
+`racon`, and the wrappers under `/usr/local/bin`.
 
 ```bash
 # build once
 docker build -t biodepot/bff:test \
     widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles
 
-# run on a breakpoint_files-style directory
-docker run --rm \
-    -u "$(id -u):$(id -g)" \
+# Mode A — fast per-side mpileup consensus (variant-aware, two records per cluster)
+docker run --rm -u "$(id -u):$(id -g)" \
     -v /path/to/breakpoint_files:/in:ro \
     -v /path/to/reference_dir:/ref:ro \
     -v /path/to/output:/out \
     biodepot/bff:test \
     processBreakpointDir.sh /in /ref/genome.fa /out 100
+
+# Mode B — polished chimeric consensus for primer design (one record per cluster)
+docker run --rm -u "$(id -u):$(id -g)" \
+    -v /path/to/breakpoint_files:/in:ro \
+    -v /path/to/reference_dir:/ref:ro \
+    -v /path/to/output:/out \
+    biodepot/bff:test \
+    polishFusionConsensus.sh /in /ref/genome.fa /out 300
 ```
 
 The `-u` flag makes the output files owned by your host user instead of
@@ -124,6 +155,36 @@ If `$BAM` or `$REFERENCE` is empty the pileup step is skipped and
 The wrapper auto-detects UCSC vs Ensembl contig naming. If the SAM uses
 `chr15`-style names but the reference doesn't, `chr` is stripped on the
 fly from `RNAME`, `RNEXT`, and the breakpoint encoding before mpileup.
+
+### For `polishFusionConsensus.sh`
+
+Same arguments as above, but the default `WINDOW` is **300** because
+minimap2 needs a longer chimeric contig to anchor reads cleanly. Per
+cluster the wrapper:
+
+1. Builds a chimeric reference by extracting `WINDOW` bases of the 5'
+   partner ending at the breakpoint and `WINDOW` bases of the 3'
+   partner starting at the breakpoint (RC where the breakpoint encoding
+   says `-`), concatenated as one record.
+2. Pulls the cluster's supporting reads' sequences from the SAM via
+   `samtools fasta` (in their original orientation, FLAG-aware).
+3. Realigns those reads to the chimeric ref with
+   `minimap2 -ax map-ont --secondary=no`.
+4. Polishes with `racon`, writing one FASTA record per cluster to
+   `OUTPUT_DIR/<name>.fa`. Racon's header carries `RC:i:<n>`
+   (read coverage) and `XC:f:<frac>` (corrected coverage).
+
+Edge cases:
+
+- **Very low depth** (e.g., 2-read clusters): racon still runs but
+  the polish is fundamentally limited by what 2 reads can correct.
+  Output is technically valid but expect residual nanopore errors.
+- **Racon fails outright** (no overlaps): the wrapper falls back to
+  the unpolished chimeric draft and prints a warning. Reported in the
+  end-of-run summary as `fallback_to_draft=N`.
+- **Lowercase variants**: racon discards case, so its output is plain
+  uppercase. Use the mpileup pipeline if you need the variant
+  annotation.
 
 ### For `breakpointPileup.pl`
 
