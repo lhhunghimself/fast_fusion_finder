@@ -8769,3 +8769,377 @@ Check README change size and section list
 339:## Smoke test
 ```
 </details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:41:46Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Commit and push README improvements
+
+```bash
+git -C /home/lhhung/fast_fusion_finder add README.md .specstory/ && git -C /home/lhhung/fast_fusion_finder commit -m "$(cat <<'EOF'
+README: add runFusionConsensus to layout, expand Quick Start
+
+- Layout block now lists bin/runFusionConsensus.sh.
+- Quick Start points at -h/--help up front and is reorganized into
+  numbered "Common usages" cases (directory + polish, explicit SAMs,
+  pileup, -D to keep artefacts).
+- Added a "Worked example" subsection that runs the driver against
+  /mnt/pikachu/bff-test/breakpoint_files + the cellranger FASTA and
+  shows the resulting two-row consensus.tsv.
+- Added an "Output columns" table so the schema isn't only described
+  inline.
+EOF
+)" && git -C /home/lhhung/fast_fusion_finder push 2>&1
+```
+
+```text
+[master bdf755f] README: add runFusionConsensus to layout, expand Quick Start
+ 3 files changed, 495 insertions(+), 17 deletions(-)
+To github.com:lhhunghimself/fast_fusion_finder.git
+   99e842d..bdf755f  master -> master
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:41:50Z)**_
+
+Pushed as `bdf755f`. Specifically:
+
+- Added `runFusionConsensus.sh` to the Layout block
+- Quick Start now leads with `--help`, then a numbered "Common usages" list of four cases
+- New "Worked example" subsection showing the actual command + resulting `consensus.tsv` for the `bff-test` fixtures
+- New "Output columns" table so the TSV schema is documented in one place
+
+---
+
+_**User (2026-04-30 20:46:11Z)**_
+
+add a dry-run which just lists the files to be processed and pd commit and push
+
+---
+
+_**Agent (claude-opus-4-7 2026-04-30 20:47:45Z)**_
+
+_**Agent (claude-opus-4-7 2026-04-30 20:47:46Z)**_
+
+<tool-use data-tool-type="read" data-tool-name="Read"><details>
+<summary>Tool use: **Read**</summary>
+ `./bin/runFusionConsensus.sh`
+
+```text
+36	MODE=polish                      # which container script to run
+37	WINDOW=                          # half-window in bp; mode-specific default below
+38	OUT=-                            # "-" means stdout; otherwise a file path
+39	SEARCH_DIR=                      # set by -d; overrides positional SAM list
+40	KEEP_DIR=                        # set by -D; preserves per-cluster FASTAs
+41	IMAGE=biodepot/bff:test          # container tag; -i overrides
+42	
+43	# Locate the in-repo Dockerfiles dir relative to this script. Used only
+44	# if the image is missing and we need to build it. If the script is
+45	# moved out of the repo (eg /usr/local/bin), this path won't resolve and
+46	# the script will refuse to auto-build (telling the user how instead).
+47	SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+48	DOCKERFILES_DIR="$SCRIPT_DIR/../widgets/fast_fusion_finder/BiodepotFusionFinder/Dockerfiles"
+49	
+50	# ---- help ------------------------------------------------------------------
+51	
+52	usage() {
+53	    # Always written to stderr so the TSV stdout stays clean if someone
+54	    # accidentally pipes runFusionConsensus.sh -h | column -t.
+55	    cat <<'EOF' >&2
+56	Usage:
+57	  runFusionConsensus.sh [opts] -d INPUT_DIR REFERENCE.fa
+58	  runFusionConsensus.sh [opts]    REFERENCE.fa SAM [SAM ...]
+59	
+60	Options:
+61	  -m polish|pileup   pipeline (default: polish)
+62	                       polish: chimeric-ref + minimap2 + racon
+63	                               -> one primer-grade record per cluster
+64	                       pileup: per-side mpileup vs the genome
+65	                               -> two records (5'/3') per cluster,
+66	                                  lowercase letters = non-reference calls
+67	  -w N               half-window size in bp
+68	                       defaults: 300 (polish) / 100 (pileup)
+69	                       polish needs more anchor for minimap2 to map
+70	                       noisy long reads onto the small chimeric ref.
+71	  -o PATH            write the TSV table to PATH instead of stdout
+72	  -D DIR             keep the per-cluster FASTAs (and pileup .tsv files)
+73	                     in DIR after the run; DIR is created if missing.
+74	                     Default: per-cluster artefacts are dropped, only
+75	                     the table survives.
+76	  -d DIR             process every *.nearby.sam under DIR.
+77	                     Mutually exclusive with passing SAM files
+78	                     positionally.
+79	  -i IMAGE           override the docker image tag
+80	                     (default: biodepot/bff:test)
+81	  -h, --help         show this help and exit
+82	
+83	Output (TSV, on stdout unless -o):
+84	  cluster<TAB>side<TAB>length<TAB>sequence
+85	    polish: side = "junction", one row per cluster
+86	    pileup: side = "5p" / "3p", two rows per cluster
+87	
+88	Example:
+89	  # Polish every cluster in a breakpoint_files/ dir using the
+90	  # cellranger Ensembl reference; redirect the table to a file.
+91	  bin/runFusionConsensus.sh \
+92	      -d /mnt/pikachu/bff-test/breakpoint_files \
+93	      -o consensus.tsv \
+94	      /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+95	
+96	Notes:
+97	  * Only docker is required on the host; the image carries samtools,
+98	    perl, minimap2, racon, and the wrapper scripts.
+99	  * The reference FASTA must have a .fai (the in-container wrappers
+100	    will create one lazily if its directory is writable).
+101	  * The SAM files passed positionally must end in .nearby.sam and have
+102	    their .nearby.readnamescoords companion next to them.
+103	EOF
+104	    exit "${1:-1}"
+105	}
+106	
+107	# Translate --help into -h before getopts sees it. getopts only handles
+108	# single-char short options.
+109	for arg in "$@"; do
+110	    [[ "$arg" == "--help" ]] && usage 0
+111	done
+112	
+113	# ---- option parsing --------------------------------------------------------
+114	
+115	while getopts "m:w:o:d:D:i:h" opt; do
+116	    case "$opt" in
+117	        m) MODE=$OPTARG;;        # polish | pileup
+118	        w) WINDOW=$OPTARG;;      # half-window override
+119	        o) OUT=$OPTARG;;         # TSV destination
+120	        d) SEARCH_DIR=$OPTARG;;  # directory-mode input
+121	        D) KEEP_DIR=$OPTARG;;    # preserve per-cluster artefacts
+122	        i) IMAGE=$OPTARG;;       # custom image tag
+123	        h) usage 0;;
+124	        *) usage;;
+125	    esac
+126	done
+127	shift $((OPTIND - 1))
+128	
+129	# Pick the in-container wrapper script and apply mode-specific window.
+130	case "$MODE" in
+131	    polish) WRAPPER=polishFusionConsensus.sh; WINDOW=${WINDOW:-300};;
+132	    pileup) WRAPPER=processBreakpointDir.sh;  WINDOW=${WINDOW:-100};;
+133	    *) echo "unknown mode: $MODE (use polish or pileup)" >&2; exit 1;;
+134	esac
+135	
+136	# ---- preflight: docker + image --------------------------------------------
+137	
+138	command -v docker >/dev/null 2>&1 \
+139	    || { echo "docker not found on PATH" >&2; exit 1; }
+140	
+141	# Build the image if missing AND we know where the Dockerfiles live.
+142	if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+143	    if [[ -d "$DOCKERFILES_DIR" ]]; then
+144	        echo "image $IMAGE not found, building from $DOCKERFILES_DIR ..." >&2
+145	        docker build -t "$IMAGE" "$DOCKERFILES_DIR" >&2
+146	    else
+147	        echo "image $IMAGE not found and Dockerfile dir not at $DOCKERFILES_DIR" >&2
+148	        echo "build the image first:" >&2
+149	        echo "  docker build -t $IMAGE <path-to-Dockerfiles>" >&2
+150	        exit 1
+151	    fi
+152	fi
+153	
+154	# ---- cleanup tracking ------------------------------------------------------
+155	
+156	# We may create up to two tempdirs (an input staging dir for explicit
+157	# SAM-file mode, and an output dir if -D wasn't given). Track them so
+158	# the EXIT trap can clean them up after the table has been emitted.
+159	cleanup_dirs=()
+160	cleanup() {
+161	    local d
+162	    for d in "${cleanup_dirs[@]+"${cleanup_dirs[@]}"}"; do
+163	        [[ -n "$d" && -d "$d" ]] && rm -rf "$d"
+164	    done
+165	}
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:47:50Z)**_
+
+Now wire `-n` / `--dry-run` in. The flag should: skip the docker preflight/build, skip the docker run, and instead print the plan + cluster list.
+
+_**Agent (claude-opus-4-7 2026-04-30 20:47:55Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:01Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:10Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:21Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:33Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:36Z)**_
+
+Now insert the dry-run report block right before the `docker run` invocation, and short-circuit there:
+
+_**Agent (claude-opus-4-7 2026-04-30 20:48:51Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+```text
+The file /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh has been updated successfully.
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:49:01Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify syntax and exercise both dry-run modes
+
+```bash
+bash -n /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh && echo "syntax ok" && echo "---dry-run, directory mode---" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh --dry-run \
+    -d /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa && echo "---dry-run, explicit SAMs, pileup, custom out---" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh -n -m pileup -w 50 -o /tmp/x.tsv \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    /mnt/pikachu/bff-test/breakpoint_files/chr15-74024222-chr17-40346374.nearby.sam
+```
+
+```text
+syntax ok
+---dry-run, directory mode---
+mode=polish wrapper=polishFusionConsensus.sh window=300
+image=biodepot/bff:test
+reference=/mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+reference_fai=/mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa.fai (present)
+input_dir=/mnt/pikachu/bff-test/breakpoint_files
+output_table=<stdout>
+clusters to process:
+  chr15-74024222-chr17-40346374
+  chr15-74024223-chr17-40346371
+total: 2 cluster(s) (dry-run; not invoking docker)
+---dry-run, explicit SAMs, pileup, custom out---
+mode=pileup wrapper=processBreakpointDir.sh window=50
+image=biodepot/bff:test
+reference=/mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+reference_fai=/mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa.fai (present)
+input_dir=/tmp/tmp.61vSnT52o4 (staged from positional SAM files)
+output_table=/tmp/x.tsv
+clusters to process:
+  chr15-74024222-chr17-40346374
+total: 1 cluster(s) (dry-run; not invoking docker)
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:49:07Z)**_
+
+<tool-use data-tool-type="shell" data-tool-name="Bash"><details>
+<summary>Tool use: **Bash**</summary>
+Verify help mentions dry-run and real run still works
+
+```bash
+echo "---help still good---" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh -h 2>&1 | grep -A 1 "dry-run\|--help" | head -10 && echo "---real run still works---" && /home/lhhung/fast_fusion_finder/bin/runFusionConsensus.sh \
+    -d /mnt/pikachu/bff-test/breakpoint_files \
+    /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+    2>/dev/null | column -t -s $'\t' | cut -c1-100
+```
+
+```text
+---help still good---
+  -n, --dry-run      list the clusters that would be processed and
+                     exit without invoking docker. Skips the image
+--
+  -h, --help         show this help and exit
+
+--
+  bin/runFusionConsensus.sh --dry-run \
+      -d /mnt/pikachu/bff-test/breakpoint_files \
+---real run still works---
+cluster                        side      length  sequence
+chr15-74024222-chr17-40346374  junction  626     TTGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACACAG
+chr15-74024223-chr17-40346371  junction  621     TGCGCGCCCTGCCTGAGTGTTGGACGCTTGAGGAAGTGGGGGAGACACAGA
+```
+</details></tool-use>
+
+_**Agent (claude-opus-4-7 2026-04-30 20:49:11Z)**_
+
+Update the README's Common usages with a dry-run example:
+
+_**Agent (claude-opus-4-7 2026-04-30 20:49:15Z)**_
+
+<tool-use data-tool-type="write" data-tool-name="Edit"><details>
+<summary>Tool use: **Edit**</summary>
+
+**Input:**
+
+- file_path: `/home/lhhung/fast_fusion_finder/README.md`
+- new_string:
+
+```
+# 4. Keep the per-cluster FASTAs around (default: dropped after the
+#    table is built). Useful when you want the .fa / .tsv files too.
+bin/runFusionConsensus.sh -D out/ \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    > consensus.tsv
+
+# 5. Dry-run: list the clusters that would be processed and exit
+#    without invoking docker. Useful for sanity-checking inputs.
+bin/runFusionConsensus.sh --dry-run \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa
+```
+```
+
+- old_string:
+
+```
+# 4. Keep the per-cluster FASTAs around (default: dropped after the
+#    table is built). Useful when you want the .fa / .tsv files too.
+bin/runFusionConsensus.sh -D out/ \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa \
+    > consensus.tsv
+```
+```
+
+- replace_all: `false`
+
+</details></tool-use>

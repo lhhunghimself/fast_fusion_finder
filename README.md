@@ -125,6 +125,12 @@ bin/runFusionConsensus.sh -D out/ \
     -d /path/to/breakpoint_files \
     /path/to/genome.fa \
     > consensus.tsv
+
+# 5. Dry-run: list the clusters that would be processed and exit
+#    without invoking docker. Useful for sanity-checking inputs.
+bin/runFusionConsensus.sh --dry-run \
+    -d /path/to/breakpoint_files \
+    /path/to/genome.fa
 ```
 
 ### Worked example (the `bff-test` fixtures)

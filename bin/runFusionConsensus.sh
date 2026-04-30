@@ -39,6 +39,7 @@ OUT=-                            # "-" means stdout; otherwise a file path
 SEARCH_DIR=                      # set by -d; overrides positional SAM list
 KEEP_DIR=                        # set by -D; preserves per-cluster FASTAs
 IMAGE=biodepot/bff:test          # container tag; -i overrides
+DRY_RUN=0                        # -n / --dry-run: list and exit without docker
 
 # Locate the in-repo Dockerfiles dir relative to this script. Used only
 # if the image is missing and we need to build it. If the script is
@@ -78,6 +79,10 @@ Options:
                      positionally.
   -i IMAGE           override the docker image tag
                      (default: biodepot/bff:test)
+  -n, --dry-run      list the clusters that would be processed and
+                     exit without invoking docker. Skips the image
+                     preflight; useful for sanity-checking an input
+                     directory or a list of SAMs.
   -h, --help         show this help and exit
 
 Output (TSV, on stdout unless -o):
@@ -85,12 +90,17 @@ Output (TSV, on stdout unless -o):
     polish: side = "junction", one row per cluster
     pileup: side = "5p" / "3p", two rows per cluster
 
-Example:
+Examples:
   # Polish every cluster in a breakpoint_files/ dir using the
   # cellranger Ensembl reference; redirect the table to a file.
   bin/runFusionConsensus.sh \
       -d /mnt/pikachu/bff-test/breakpoint_files \
       -o consensus.tsv \
+      /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+
+  # Dry-run: list the clusters that would be processed and exit.
+  bin/runFusionConsensus.sh --dry-run \
+      -d /mnt/pikachu/bff-test/breakpoint_files \
       /mnt/pikachu/autoindex_110_44/cellranger_ref_cache/Homo_sapiens.GRCh38.dna.primary_assembly.fa
 
 Notes:
@@ -104,15 +114,22 @@ EOF
     exit "${1:-1}"
 }
 
-# Translate --help into -h before getopts sees it. getopts only handles
-# single-char short options.
+# Translate long options into short ones before getopts sees them
+# (getopts only handles single-char short options). --help exits
+# immediately; --dry-run is rewritten so the rest of the loop sees -n.
+translated_args=()
 for arg in "$@"; do
-    [[ "$arg" == "--help" ]] && usage 0
+    case "$arg" in
+        --help)    usage 0;;
+        --dry-run) translated_args+=("-n");;
+        *)         translated_args+=("$arg");;
+    esac
 done
+set -- "${translated_args[@]+"${translated_args[@]}"}"
 
 # ---- option parsing --------------------------------------------------------
 
-while getopts "m:w:o:d:D:i:h" opt; do
+while getopts "m:w:o:d:D:i:nh" opt; do
     case "$opt" in
         m) MODE=$OPTARG;;        # polish | pileup
         w) WINDOW=$OPTARG;;      # half-window override
@@ -120,6 +137,7 @@ while getopts "m:w:o:d:D:i:h" opt; do
         d) SEARCH_DIR=$OPTARG;;  # directory-mode input
         D) KEEP_DIR=$OPTARG;;    # preserve per-cluster artefacts
         i) IMAGE=$OPTARG;;       # custom image tag
+        n) DRY_RUN=1;;           # list clusters, skip docker
         h) usage 0;;
         *) usage;;
     esac
@@ -134,20 +152,25 @@ case "$MODE" in
 esac
 
 # ---- preflight: docker + image --------------------------------------------
+#
+# Skipped under --dry-run: a planning run shouldn't trigger an image
+# build, and shouldn't fail on machines that don't have docker yet.
 
-command -v docker >/dev/null 2>&1 \
-    || { echo "docker not found on PATH" >&2; exit 1; }
+if [[ $DRY_RUN -eq 0 ]]; then
+    command -v docker >/dev/null 2>&1 \
+        || { echo "docker not found on PATH" >&2; exit 1; }
 
-# Build the image if missing AND we know where the Dockerfiles live.
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    if [[ -d "$DOCKERFILES_DIR" ]]; then
-        echo "image $IMAGE not found, building from $DOCKERFILES_DIR ..." >&2
-        docker build -t "$IMAGE" "$DOCKERFILES_DIR" >&2
-    else
-        echo "image $IMAGE not found and Dockerfile dir not at $DOCKERFILES_DIR" >&2
-        echo "build the image first:" >&2
-        echo "  docker build -t $IMAGE <path-to-Dockerfiles>" >&2
-        exit 1
+    # Build the image if missing AND we know where the Dockerfiles live.
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        if [[ -d "$DOCKERFILES_DIR" ]]; then
+            echo "image $IMAGE not found, building from $DOCKERFILES_DIR ..." >&2
+            docker build -t "$IMAGE" "$DOCKERFILES_DIR" >&2
+        else
+            echo "image $IMAGE not found and Dockerfile dir not at $DOCKERFILES_DIR" >&2
+            echo "build the image first:" >&2
+            echo "  docker build -t $IMAGE <path-to-Dockerfiles>" >&2
+            exit 1
+        fi
     fi
 fi
 
@@ -218,6 +241,54 @@ if [[ -n "$KEEP_DIR" ]]; then
 else
     OUT_DIR=$(mktemp -d)
     cleanup_dirs+=("$OUT_DIR")
+fi
+
+# ---- dry-run: report and exit ---------------------------------------------
+#
+# At this point all inputs are resolved (and, for explicit-SAM mode,
+# already staged into INPUT_DIR). We can list what would happen without
+# touching docker. Output goes to stdout so it can be piped to less.
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    {
+        printf 'mode=%s wrapper=%s window=%d\n' "$MODE" "$WRAPPER" "$WINDOW"
+        printf 'image=%s\n' "$IMAGE"
+        printf 'reference=%s\n' "$REF"
+        if [[ -f "$REF.fai" ]]; then
+            printf 'reference_fai=%s.fai (present)\n' "$REF"
+        else
+            printf 'reference_fai=%s.fai (MISSING; will be built lazily)\n' "$REF"
+        fi
+        printf 'input_dir=%s' "$INPUT_DIR"
+        [[ -z "$SEARCH_DIR" ]] && printf ' (staged from positional SAM files)'
+        printf '\n'
+        if [[ "$OUT" == "-" ]]; then
+            printf 'output_table=<stdout>\n'
+        else
+            printf 'output_table=%s\n' "$OUT"
+        fi
+        if [[ -n "$KEEP_DIR" ]]; then
+            printf 'keep_dir=%s\n' "$OUT_DIR"
+        fi
+        printf 'clusters to process:\n'
+        count=0
+        shopt -s nullglob
+        for sam in "$INPUT_DIR"/*.nearby.sam; do
+            base=$(basename "$sam" .nearby.sam)
+            coords="$INPUT_DIR/${base}.nearby.readnamescoords"
+            if [[ -f "$coords" ]]; then
+                printf '  %s\n' "$base"
+            else
+                printf '  %s  (WARN: missing coords)\n' "$base"
+            fi
+            count=$((count+1))
+        done
+        if [[ $count -eq 0 ]]; then
+            printf '  (none — no *.nearby.sam files in %s)\n' "$INPUT_DIR"
+        fi
+        printf 'total: %d cluster(s) (dry-run; not invoking docker)\n' "$count"
+    }
+    exit 0
 fi
 
 # ---- run the in-container pipeline ----------------------------------------
